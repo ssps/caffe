@@ -136,6 +136,7 @@ class Solver {
   void InitTrainNet();
   void InitTestNets();
   void InitPs();
+  void SetPsParamValues();
 
   // Client of the Solver optionally may call this in order to set the function
   // that the solver uses to see what action it should take (e.g. snapshot or

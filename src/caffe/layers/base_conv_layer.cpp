@@ -80,42 +80,24 @@ void BaseConvolutionLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
     } else {
       this->blobs_.resize(1);
     }
-    // Initialize the weights:
+    // Initialize and fill the weights:
     // output channels x input channels per-group x kernel height x kernel width
-    LOG(INFO) << "Convolution layer: out_channels = " << conv_out_channels_
-              << " in_channels = " << conv_in_channels_
-              << " h = " << kernel_h_ << " w = " << kernel_w_;
-    vector<int> weight_shape(4);
-    weight_shape[0] = conv_out_channels_;
-    weight_shape[1] = conv_in_channels_ / group_;
-    weight_shape[2] = kernel_h_;
-    weight_shape[3] = kernel_w_;
-    this->blobs_[0].reset(new Blob<Dtype>(weight_shape));
-    // If necessary, initialize the biases.
+    this->blobs_[0].reset(new Blob<Dtype>(
+        conv_out_channels_, conv_in_channels_ / group_, kernel_h_, kernel_w_));
+    shared_ptr<Filler<Dtype> > weight_filler(GetFiller<Dtype>(
+        this->layer_param_.convolution_param().weight_filler()));
+    weight_filler->Fill(this->blobs_[0].get());
+    // If necessary, initialize and fill the biases.
     if (bias_term_) {
       vector<int> bias_shape(1, num_output_);
       this->blobs_[1].reset(new Blob<Dtype>(bias_shape));
+      shared_ptr<Filler<Dtype> > bias_filler(GetFiller<Dtype>(
+          this->layer_param_.convolution_param().bias_filler()));
+      bias_filler->Fill(this->blobs_[1].get());
     }
   }
   // Propagate gradients to the parameters (as directed by backward pass).
   this->param_propagate_down_.resize(this->blobs_.size(), true);
-  /* Cui: InitializeValues() called explicitly in solver */
-  // this->InitializeValues();
-}
-
-template <typename Dtype>
-void BaseConvolutionLayer<Dtype>::InitializeValues() {
-  bias_term_ = this->layer_param_.inner_product_param().bias_term();
-  // fill the weights
-  shared_ptr<Filler<Dtype> > weight_filler(GetFiller<Dtype>(
-      this->layer_param_.convolution_param().weight_filler()));
-  weight_filler->Fill(this->blobs_[0].get());
-  // If necessary, fill the bias term
-  if (bias_term_) {
-    shared_ptr<Filler<Dtype> > bias_filler(GetFiller<Dtype>(
-        this->layer_param_.convolution_param().bias_filler()));
-    bias_filler->Fill(this->blobs_[1].get());
-  }
 }
 
 template <typename Dtype>

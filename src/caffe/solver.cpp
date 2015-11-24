@@ -995,7 +995,14 @@ void Solver<float>::InitPs() {
   cout << "total_size = " << total_size << endl;
   cout << "read_size = " << read_size << endl;
   cout << "write_size = " << write_size << endl;
+}
 
+template <>
+void Solver<float>::SetPsParamValues() {
+  if (ps_config_.no_ps) {
+    return;
+  }
+  vector<shared_ptr<Layer<float> > >& layers = this->net_->layers_;
   /* Set initial parameter values */
   if (ps_config_.worker_id == 0) {
     for (int layer_id = 0; layer_id < layer_infos_.size(); layer_id++) {
@@ -1016,10 +1023,6 @@ void Solver<float>::InitPs() {
           /* "false" means that we don't change head here,
            * because we want to keep what's currently in CPU memory */
         }
-      }
-      /* Let the layer initialize values */
-      layer->InitializeValues();
-      if (layer_info.param_infos.size()) {
         /* Write */
         for (int param_id = 0;
             param_id < layer_info.param_infos.size(); param_id++) {
@@ -1075,9 +1078,9 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
       LayerInfo& layer_info = layer_infos_[layer_id];
       LayerHandles& layer_handles = layer_info.layer_handles[batch_id];
 
+      tick_start = tbb::tick_count::now();
 #if defined(LOCAL_DATA_IN_PS)
       /* Access intermediate data blobs */
-      tick_start = tbb::tick_count::now();
       // LOG(INFO) << "Read intermediate data blobs";
       for (int i = 0; i < layer_info.imbs_to_access_fw.size(); i++) {
         ImbInfo& imb_info = layer_info.imbs_to_access_fw[i];
@@ -1143,9 +1146,9 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
         layer_info.fw_compute_time += (tbb::tick_count::now() - tick_start).seconds();
       }
 
+      tick_start = tbb::tick_count::now();
 #if defined(LOCAL_DATA_IN_PS)
       /* Release intermediate data blobs */
-      tick_start = tbb::tick_count::now();
       // LOG(INFO) << "Release intermediate data blobs";
       for (int i = 0; i < layer_info.imbs_to_release_fw.size(); i++) {
         ImbInfo& imb_info = layer_info.imbs_to_release_fw[i];
@@ -1202,9 +1205,9 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
       LayerInfo& layer_info = layer_infos_[layer_id];
       LayerHandles& layer_handles = layer_info.layer_handles[batch_id];
 
+      tick_start = tbb::tick_count::now();
 #if defined(LOCAL_DATA_IN_PS)
       /* Access intermediate data blobs */
-      tick_start = tbb::tick_count::now();
       for (int i = 0; i < layer_info.imbs_to_access_bw.size(); i++) {
         ImbInfo& imb_info = layer_info.imbs_to_access_bw[i];
         CHECK_LT(i, layer_handles.imbs_to_access_bw.size());
@@ -1293,10 +1296,10 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
         layer_info.bw_compute_time += (tbb::tick_count::now() - tick_start).seconds();
       }
 
+      tick_start = tbb::tick_count::now();
 #if defined(LOCAL_DATA_IN_PS)
       /* Release intermediate data blobs */
       // LOG(INFO) << "Release intermediate data blobs";
-      tick_start = tbb::tick_count::now();
       for (int i = 0; i < layer_info.imbs_to_release_bw.size(); i++) {
         ImbInfo& imb_info = layer_info.imbs_to_release_bw[i];
         CHECK_LT(i, layer_handles.imbs_to_release_bw.size());
@@ -1389,6 +1392,11 @@ void Solver<double>::InitPs() {
 }
 
 template <>
+void Solver<double>::SetPsParamValues() {
+  CHECK(0);
+}
+
+template <>
 double SGDSolver<double>::ForwardBackwardUsingPs(
     const vector<Blob<double>* > & bottom,
     const shared_ptr<Net<double> >& net, bool test) {
@@ -1404,6 +1412,8 @@ void Solver<Dtype>::Step(int iters) {
   int average_loss = this->param_.average_loss();
   vector<Dtype> losses;
   Dtype smoothed_loss = 0;
+
+  SetPsParamValues();
 
   double read_ps_time = 0.0;
   double compute_time = 0.0;

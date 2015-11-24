@@ -131,8 +131,6 @@ class Layer {
   virtual void Reshape(const vector<Blob<Dtype>*>& bottom,
       const vector<Blob<Dtype>*>& top) = 0;
 
-  virtual void InitializeValues() {}
-
   /**
    * @brief Given the bottom blobs, compute the top blobs and the loss.
    *
