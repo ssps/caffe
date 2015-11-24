@@ -10,13 +10,13 @@ import sys
 sys.path.append('./examples/coco_caption/')
 
 COCO_PATH = './data/coco/coco'
-COCO_TOOL_PATH = '%s/PythonAPI/build/lib/pycocotools' % COCO_PATH
+COCO_TOOL_PATH = '%s/PythonAPI/build/lib.linux-x86_64-2.7/pycocotools' % COCO_PATH
 COCO_IMAGE_ROOT = '%s/images' % COCO_PATH
 
 MAX_HASH = 100000
 
 sys.path.append(COCO_TOOL_PATH)
-from coco import COCO
+from pycocotools.coco import COCO
 
 from hdf5_sequence_generator import SequenceGenerator, HDF5SequenceWriter
 
@@ -215,7 +215,8 @@ COCO_ANNO_PATH = '%s/annotations/captions_%%s2014.json' % COCO_PATH
 COCO_IMAGE_PATTERN = '%s/images/%%s2014' % COCO_PATH
 COCO_IMAGE_ID_PATTERN = 'COCO_%s2014_%%012d.jpg'
 
-BUFFER_SIZE = 100
+# BUFFER_SIZE = 100
+BUFFER_SIZE = 64
 OUTPUT_DIR = './examples/coco_caption/h5_data/buffer_%d' % BUFFER_SIZE
 SPLITS_PATTERN = './data/coco/coco2014_cocoid.%s.txt'
 OUTPUT_DIR_PATTERN = '%s/%%s_batches' % OUTPUT_DIR

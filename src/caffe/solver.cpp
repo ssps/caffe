@@ -24,6 +24,9 @@ using std::cerr;
 using std::endl;
 using boost::make_shared;
 
+#define MULTI_TABLE
+// #define LOCAL_DATA_IN_PS
+
 namespace caffe {
 
 template<typename Dtype>
@@ -87,6 +90,9 @@ void Solver<Dtype>::Init(const SolverParameter& param) {
   }
   iter_ = 0;
   current_step_ = 0;
+
+  /* Initialize parameter server */
+  InitPs();
 }
 
 template <typename Dtype>
@@ -255,8 +261,10 @@ void Solver<float>::InitPs() {
         layer_info.row_ids.push_back(row_id++);
         layer_info.history_data_row_ids.push_back(local_store_row_id++);
       }
+#if defined(MULTI_TABLE)
       table_id++;
       row_id = 0;
+#endif
     }
     layer_info.fw_read_time = 0;
     layer_info.fw_compute_time = 0;
@@ -821,6 +829,7 @@ void Solver<float>::InitPs() {
     for (int layer_id = 0; layer_id < layer_infos_.size(); layer_id++) {
       LayerInfo& layer_info = layer_infos_[layer_id];
       LayerHandles& layer_handles = layer_info.layer_handles[batch_id];
+#if defined(LOCAL_DATA_IN_PS)
       /* Access intermediate data blobs */
       for (int i = 0; i < layer_info.imbs_to_access_fw.size(); i++) {
         ImbInfo& imb_info = layer_info.imbs_to_access_fw[i];
@@ -847,12 +856,14 @@ void Solver<float>::InitPs() {
         read_size += imb_info.fetch ? access_info.num_vals : 0;
         CHECK_GE(read_size, 0);
       }
+#endif
       /* Read model parameters */
       if (layer_info.param_infos.size()) {
         layer_handles.read_handle = ps_->virtual_read_batch(
             layer_info.table_id, layer_info.row_ids,
             ps_config_.slack, layer_info.num_vals);
       }
+#if defined(LOCAL_DATA_IN_PS)
       /* Release intermediate data blobs */
       for (int i = 0; i < layer_info.imbs_to_release_fw.size(); i++) {
         ImbInfo& imb_info = layer_info.imbs_to_release_fw[i];
@@ -879,6 +890,7 @@ void Solver<float>::InitPs() {
         write_size += imb_info.keep ? access_info.num_vals : 0;
         CHECK_GE(write_size, 0);
       }
+#endif
       /* Release model parameters */
       if (layer_info.param_infos.size()) {
         layer_handles.postread_handle = ps_->virtual_postread_batch(
@@ -893,6 +905,7 @@ void Solver<float>::InitPs() {
       }
       LayerInfo& layer_info = layer_infos_[layer_id];
       LayerHandles& layer_handles = layer_info.layer_handles[batch_id];
+#if defined(LOCAL_DATA_IN_PS)
       /* Access intermediate data blobs */
       for (int i = 0; i < layer_info.imbs_to_access_bw.size(); i++) {
         ImbInfo& imb_info = layer_info.imbs_to_access_bw[i];
@@ -921,6 +934,7 @@ void Solver<float>::InitPs() {
         read_size += imb_info.fetch ? access_info.num_vals : 0;
         CHECK_GE(read_size, 0);
       }
+#endif
       /* Read and prewrite model parameters */
       if (layer_info.param_infos.size()) {
         layer_handles.prewrite_handle = ps_->virtual_prewrite_batch(
@@ -933,6 +947,7 @@ void Solver<float>::InitPs() {
                 layer_info.history_data_row_ids, layer_info.num_vals,
                 /* fetch */ true);
       }
+#if defined(LOCAL_DATA_IN_PS)
       /* Postaccess intermediate data blobs */
       for (int i = 0; i < layer_info.imbs_to_release_bw.size(); i++) {
         ImbInfo& imb_info = layer_info.imbs_to_release_bw[i];
@@ -961,6 +976,7 @@ void Solver<float>::InitPs() {
         write_size += imb_info.keep ? access_info.num_vals : 0;
         CHECK_GE(write_size, 0);
       }
+#endif
       /* Postread and write model parameters */
       if (layer_info.param_infos.size()) {
         layer_handles.write_handle = ps_->virtual_write_batch(
@@ -1059,6 +1075,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
       LayerInfo& layer_info = layer_infos_[layer_id];
       LayerHandles& layer_handles = layer_info.layer_handles[batch_id];
 
+#if defined(LOCAL_DATA_IN_PS)
       /* Access intermediate data blobs */
       tick_start = tbb::tick_count::now();
       // LOG(INFO) << "Read intermediate data blobs";
@@ -1092,6 +1109,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
             << "layer " << layer_names[layer_id] << " has gpu diff";
         imb->set_gpu_diff(reinterpret_cast<float *>(read_buffer), true);
       }
+#endif
       /* Read model parameters */
       if (layer_info.param_infos.size()) {
         // LOG(INFO) << "Read params";
@@ -1125,6 +1143,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
         layer_info.fw_compute_time += (tbb::tick_count::now() - tick_start).seconds();
       }
 
+#if defined(LOCAL_DATA_IN_PS)
       /* Release intermediate data blobs */
       tick_start = tbb::tick_count::now();
       // LOG(INFO) << "Release intermediate data blobs";
@@ -1152,6 +1171,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
         imb->set_gpu_diff(NULL, true);
         ps_->postlocalaccess_batch(handle);
       }
+#endif
       /* Release read buffers */
       if (layer_info.param_infos.size()) {
         // LOG(INFO) << "Release read buffers";
@@ -1182,6 +1202,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
       LayerInfo& layer_info = layer_infos_[layer_id];
       LayerHandles& layer_handles = layer_info.layer_handles[batch_id];
 
+#if defined(LOCAL_DATA_IN_PS)
       /* Access intermediate data blobs */
       tick_start = tbb::tick_count::now();
       for (int i = 0; i < layer_info.imbs_to_access_bw.size(); i++) {
@@ -1209,6 +1230,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
             << "layer " << layer_names[layer_id] << " has gpu diff";
         imb->set_gpu_diff(reinterpret_cast<float *>(imb_buffer), true);
       }
+#endif
       if (layer_info.param_infos.size()) {
         /* Prepare write buffers */
         // LOG(INFO) << "Prepare write buffers";
@@ -1271,6 +1293,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
         layer_info.bw_compute_time += (tbb::tick_count::now() - tick_start).seconds();
       }
 
+#if defined(LOCAL_DATA_IN_PS)
       /* Release intermediate data blobs */
       // LOG(INFO) << "Release intermediate data blobs";
       tick_start = tbb::tick_count::now();
@@ -1298,6 +1321,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
         imb->set_gpu_diff(NULL, true);
         ps_->postlocalaccess_batch(handle);
       }
+#endif
       CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
       if (!test) {
         layer_info.bw_write_time += (tbb::tick_count::now() - tick_start).seconds();
@@ -1380,8 +1404,6 @@ void Solver<Dtype>::Step(int iters) {
   int average_loss = this->param_.average_loss();
   vector<Dtype> losses;
   Dtype smoothed_loss = 0;
-
-  InitPs();
 
   double read_ps_time = 0.0;
   double compute_time = 0.0;

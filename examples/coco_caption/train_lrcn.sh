@@ -1,17 +1,10 @@
 #!/usr/bin/env bash
 
-GPU_ID=0
-WEIGHTS=\
-./models/bvlc_reference_caffenet/bvlc_reference_caffenet.caffemodel
-DATA_DIR=./examples/coco_caption/h5_data/
-if [ ! -d $DATA_DIR ]; then
-    echo "Data directory not found: $DATA_DIR"
-    echo "First, download the COCO dataset (follow instructions in data/coco)"
-    echo "Then, run ./examples/coco_caption/coco_to_hdf5_data.py to create the Caffe input data"
-    exit 1
-fi
+python scripts/duplicate.py examples/coco_caption/8parts/lrcn.prototxt 8
+python scripts/duplicate.py examples/coco_caption/8parts/lrcn_solver.prototxt 8
+mkdir $1
+git status > $1/git-status
+git show > $1/git-show
+git diff > $1/git-diff
 
-./build/tools/caffe train \
-    -solver ./examples/coco_caption/lrcn_solver.prototxt \
-    -weights $WEIGHTS \
-    -gpu $GPU_ID
+mpirun -machinefile examples/coco_caption/8parts/machinefile ./build/tools/caffe_mpi train --solver=./examples/coco_caption/8parts/lrcn_solver.prototxt --weights=./models/bvlc_reference_caffenet/bvlc_reference_caffenet.caffemodel --ps_config=examples/coco_caption/8parts/ps_config 2>&1 | tee $1/output.txt
