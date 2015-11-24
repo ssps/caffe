@@ -47,6 +47,8 @@ DEFINE_int32(count, -1, "");
 
 int main(int argc, char** argv) {
   ::google::InitGoogleLogging(argv[0]);
+  // Print output to stderr (while still logging)
+  FLAGS_alsologtostderr = 1;
 
 #ifndef GFLAGS_GFLAGS_H_
   namespace gflags = google;
