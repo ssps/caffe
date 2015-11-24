@@ -85,8 +85,8 @@ void* Caffe::RNG::generator() {
 #else  // Normal GPU + CPU Caffe.
 
 Caffe::Caffe()
-    : cublas_handle_(NULL), curand_generator_(NULL), random_generator_(),
-    mode_(Caffe::CPU) {
+    : cuda_stream_(NULL), cublas_handle_(NULL), curand_generator_(NULL),
+      random_generator_(), mode_(Caffe::CPU) {
   // Try to create a cublas handler, and report an error if failed (but we will
   // keep the program running as one might just want to run CPU code).
   if (cublasCreate(&cublas_handle_) != CUBLAS_STATUS_SUCCESS) {
@@ -99,6 +99,10 @@ Caffe::Caffe()
       != CURAND_STATUS_SUCCESS) {
     LOG(ERROR) << "Cannot create Curand generator. Curand won't be available.";
   }
+  /* Cui: create CUDA stream */
+  CUDA_CHECK(cudaStreamCreate(&cuda_stream_));
+  CUBLAS_CHECK(cublasSetStream(cublas_handle_, cuda_stream_));
+  CURAND_CHECK(curandSetStream(curand_generator_, cuda_stream_));
 }
 
 Caffe::~Caffe() {
@@ -106,6 +110,11 @@ Caffe::~Caffe() {
   if (curand_generator_) {
     CURAND_CHECK(curandDestroyGenerator(curand_generator_));
   }
+  /* Cui: This destructor function is called after the CUDA driver shuts down,
+   * so we are not able to call the cudaStreamDestroy() function. */
+  // if (cuda_stream_) {
+    // CUDA_CHECK(cudaStreamDestroy(cuda_stream_));
+  // }
 }
 
 void Caffe::set_random_seed(const unsigned int seed) {
@@ -129,6 +138,8 @@ void Caffe::set_random_seed(const unsigned int seed) {
 void Caffe::SetDevice(const int device_id) {
   int current_device;
   CUDA_CHECK(cudaGetDevice(&current_device));
+  /* Cui's debugging code */
+  CHECK_EQ(current_device, device_id);
   if (current_device == device_id) {
     return;
   }
@@ -144,6 +155,11 @@ void Caffe::SetDevice(const int device_id) {
       CURAND_RNG_PSEUDO_DEFAULT));
   CURAND_CHECK(curandSetPseudoRandomGeneratorSeed(Get().curand_generator_,
       cluster_seedgen()));
+  /* Cui: re-create CUDA stream */
+  if (Get().cuda_stream_) CUDA_CHECK(cudaStreamDestroy(Get().cuda_stream_));
+  CUDA_CHECK(cudaStreamCreate(&Get().cuda_stream_));
+  CUBLAS_CHECK(cublasSetStream(Get().cublas_handle_, Get().cuda_stream_));
+  CURAND_CHECK(curandSetStream(Get().curand_generator_, Get().cuda_stream_));
 }
 
 void Caffe::DeviceQuery() {

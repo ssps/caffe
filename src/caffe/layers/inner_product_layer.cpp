@@ -34,21 +34,32 @@ void InnerProductLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
     vector<int> weight_shape(2);
     weight_shape[0] = N_;
     weight_shape[1] = K_;
+    LOG(INFO) << "Inner product layer: N = " << N_ << " K = " << K_;
     this->blobs_[0].reset(new Blob<Dtype>(weight_shape));
-    // fill the weights
-    shared_ptr<Filler<Dtype> > weight_filler(GetFiller<Dtype>(
-        this->layer_param_.inner_product_param().weight_filler()));
-    weight_filler->Fill(this->blobs_[0].get());
-    // If necessary, intiialize and fill the bias term
+    // If necessary, initialize the bias term
     if (bias_term_) {
       vector<int> bias_shape(1, N_);
       this->blobs_[1].reset(new Blob<Dtype>(bias_shape));
-      shared_ptr<Filler<Dtype> > bias_filler(GetFiller<Dtype>(
-          this->layer_param_.inner_product_param().bias_filler()));
-      bias_filler->Fill(this->blobs_[1].get());
     }
   }  // parameter initialization
   this->param_propagate_down_.resize(this->blobs_.size(), true);
+  /* Cui: InitializeValues() called explicitly in solver */
+  // this->InitializeValues();
+}
+
+template <typename Dtype>
+void InnerProductLayer<Dtype>::InitializeValues() {
+  bias_term_ = this->layer_param_.inner_product_param().bias_term();
+  // fill the weights
+  shared_ptr<Filler<Dtype> > weight_filler(GetFiller<Dtype>(
+      this->layer_param_.inner_product_param().weight_filler()));
+  weight_filler->Fill(this->blobs_[0].get());
+  // If necessary, fill the bias term
+  if (bias_term_) {
+    shared_ptr<Filler<Dtype> > bias_filler(GetFiller<Dtype>(
+        this->layer_param_.inner_product_param().bias_filler()));
+    bias_filler->Fill(this->blobs_[1].get());
+  }
 }
 
 template <typename Dtype>

@@ -333,7 +333,7 @@ __global__ void StoPoolBackward(const int nthreads,
 
 template <typename Dtype>
 void PoolingLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top,
-      const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom) {
+      const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom) {\
   if (!propagate_down[0]) {
     return;
   }
@@ -348,6 +348,7 @@ void PoolingLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top,
   switch (this->layer_param_.pooling_param().pool()) {
   case PoolingParameter_PoolMethod_MAX:
     if (use_top_mask) {
+      CHECK(0);
       top_mask = top[1]->gpu_data();
     } else {
       mask = max_idx_.gpu_data();

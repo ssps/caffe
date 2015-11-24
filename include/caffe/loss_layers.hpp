@@ -39,7 +39,9 @@ class AccuracyLayer : public Layer<Dtype> {
 
   virtual inline const char* type() const { return "Accuracy"; }
   virtual inline int ExactNumBottomBlobs() const { return 2; }
-  virtual inline int ExactNumTopBlobs() const { return 1; }
+  // virtual inline int ExactNumTopBlobs() const { return 1; }
+    /* Changed by Cui */
+  virtual inline int ExactNumTopBlobs() const { return -1; }
 
  protected:
   /**
@@ -748,6 +750,8 @@ class SoftmaxWithLossLayer : public LossLayer<Dtype> {
   shared_ptr<Layer<Dtype> > softmax_layer_;
   /// prob stores the output probability predictions from the SoftmaxLayer.
   Blob<Dtype> prob_;
+  /* Cui: added by Cui */
+  Blob<Dtype> losses_;
   /// bottom vector holder used in call to the underlying SoftmaxLayer::Forward
   vector<Blob<Dtype>*> softmax_bottom_vec_;
   /// top vector holder used in call to the underlying SoftmaxLayer::Forward

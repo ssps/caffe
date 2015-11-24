@@ -68,15 +68,29 @@ Blob<Dtype>::Blob(const vector<int>& shape)
 }
 
 template <typename Dtype>
-const Dtype* Blob<Dtype>::cpu_data() const {
-  CHECK(data_);
-  return (const Dtype*)data_->cpu_data();
+void Blob<Dtype>::set_cpu_data(Dtype* data) {
+  data_->set_cpu_data(data);
 }
 
 template <typename Dtype>
-void Blob<Dtype>::set_cpu_data(Dtype* data) {
-  CHECK(data);
-  data_->set_cpu_data(data);
+void Blob<Dtype>::set_gpu_data(Dtype* data, bool change_head) {
+  data_->set_gpu_data(data, change_head);
+}
+
+template <typename Dtype>
+void Blob<Dtype>::set_cpu_diff(Dtype* diff) {
+  diff_->set_cpu_data(diff);
+}
+
+template <typename Dtype>
+void Blob<Dtype>::set_gpu_diff(Dtype* diff, bool change_head) {
+  diff_->set_gpu_data(diff, change_head);
+}
+
+template <typename Dtype>
+const Dtype* Blob<Dtype>::cpu_data() const {
+  CHECK(data_);
+  return (const Dtype*)data_->cpu_data();
 }
 
 template <typename Dtype>
@@ -122,6 +136,30 @@ Dtype* Blob<Dtype>::mutable_gpu_diff() {
 }
 
 template <typename Dtype>
+const Dtype* Blob<Dtype>::check_cpu_data() const {
+  CHECK(data_);
+  return (const Dtype*)data_->check_cpu_data();
+}
+
+template <typename Dtype>
+const Dtype* Blob<Dtype>::check_gpu_data() const {
+  CHECK(data_);
+  return (const Dtype*)data_->check_gpu_data();
+}
+
+template <typename Dtype>
+const Dtype* Blob<Dtype>::check_cpu_diff() const {
+  CHECK(diff_);
+  return (const Dtype*)diff_->check_cpu_data();
+}
+
+template <typename Dtype>
+const Dtype* Blob<Dtype>::check_gpu_diff() const {
+  CHECK(diff_);
+  return (const Dtype*)diff_->check_gpu_data();
+}
+
+template <typename Dtype>
 void Blob<Dtype>::ShareData(const Blob& other) {
   CHECK_EQ(count_, other.count());
   data_ = other.data();
@@ -145,7 +183,10 @@ void Blob<Dtype>::Update() {
   switch (data_->head()) {
   case SyncedMemory::HEAD_AT_CPU:
     // perform computation on CPU
-    caffe_axpy<Dtype>(count_, Dtype(-1),
+    // Cui: I made the local learning rate negative, so that the updates will be
+    // added to the parameter data instead of subtracted
+    // caffe_axpy<Dtype>(count_, Dtype(-1),
+    caffe_axpy<Dtype>(count_, Dtype(1),
         static_cast<const Dtype*>(diff_->cpu_data()),
         static_cast<Dtype*>(data_->mutable_cpu_data()));
     break;
@@ -153,7 +194,10 @@ void Blob<Dtype>::Update() {
   case SyncedMemory::SYNCED:
 #ifndef CPU_ONLY
     // perform computation on GPU
-    caffe_gpu_axpy<Dtype>(count_, Dtype(-1),
+    // Cui: I made the local learning rate negative, so that the updates will be
+    // added to the parameter data instead of subtracted
+    // caffe_gpu_axpy<Dtype>(count_, Dtype(-1),
+    caffe_gpu_axpy<Dtype>(count_, Dtype(1),
         static_cast<const Dtype*>(diff_->gpu_data()),
         static_cast<Dtype*>(data_->mutable_gpu_data()));
 #else
@@ -492,4 +536,3 @@ template class Blob<int>;
 template class Blob<unsigned int>;
 
 }  // namespace caffe
-

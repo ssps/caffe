@@ -100,6 +100,8 @@ class Layer {
   virtual void Reshape(const vector<Blob<Dtype>*>& bottom,
       const vector<Blob<Dtype>*>& top) = 0;
 
+  virtual void InitializeValues() {}
+
   /**
    * @brief Given the bottom blobs, compute the top blobs and the loss.
    *
@@ -144,6 +146,9 @@ class Layer {
   inline void Backward(const vector<Blob<Dtype>*>& top,
       const vector<bool>& propagate_down,
       const vector<Blob<Dtype>*>& bottom);
+  virtual void ComputeDiff(const vector<Blob<Dtype>*>& top,
+      const vector<bool>& propagate_down,
+      const vector<Blob<Dtype>*>& bottom) {}
 
   /**
    * @brief Returns the vector of learnable parameter blobs.
@@ -382,6 +387,7 @@ class Layer {
    */
   inline void SetLossWeights(const vector<Blob<Dtype>*>& top) {
     const int num_loss_weights = layer_param_.loss_weight_size();
+    LOG(INFO) << "num_loss_weights = " << num_loss_weights;
     if (num_loss_weights) {
       CHECK_EQ(top.size(), num_loss_weights) << "loss_weight must be "
           "unspecified or specified once per top blob.";

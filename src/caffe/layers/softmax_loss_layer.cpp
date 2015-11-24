@@ -48,6 +48,9 @@ void SoftmaxWithLossLayer<Dtype>::Reshape(
     // softmax output
     top[1]->ReshapeLike(*bottom[0]);
   }
+  /* Cui: added by Cui */
+  losses_.ReshapeLike(*bottom[0]);
+  losses_.mutable_gpu_diff();
 }
 
 template <typename Dtype>

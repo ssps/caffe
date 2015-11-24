@@ -41,6 +41,9 @@ DEFINE_bool(encoded, false,
     "When this option is on, the encoded image will be save in datum");
 DEFINE_string(encode_type, "",
     "Optional: What type should we encode the image as ('png','jpg',...).");
+DEFINE_int32(newdb, 1, "");
+DEFINE_int32(start, 0, "");
+DEFINE_int32(count, -1, "");
 
 int main(int argc, char** argv) {
   ::google::InitGoogleLogging(argv[0]);
@@ -89,19 +92,25 @@ int main(int argc, char** argv) {
 
   // Create new DB
   scoped_ptr<db::DB> db(db::GetDB(FLAGS_backend));
-  db->Open(argv[3], db::NEW);
+  db->Open(argv[3], FLAGS_newdb ? db::NEW : db::WRITE);
   scoped_ptr<db::Transaction> txn(db->NewTransaction());
 
   // Storing to db
   std::string root_folder(argv[1]);
   Datum datum;
-  int count = 0;
+  int line_id;
   const int kMaxKeyLength = 256;
   char key_cstr[kMaxKeyLength];
   int data_size = 0;
   bool data_size_initialized = false;
 
-  for (int line_id = 0; line_id < lines.size(); ++line_id) {
+  for (line_id = 0; line_id < lines.size(); ++line_id) {
+    if (line_id < FLAGS_start) {
+      continue;
+    }
+    if (FLAGS_count >= 0 && line_id >= FLAGS_start + FLAGS_count) {
+      continue;
+    }
     bool status;
     std::string enc = encode_type;
     if (encoded && !enc.size()) {
@@ -117,6 +126,10 @@ int main(int argc, char** argv) {
         lines[line_id].second, resize_height, resize_width, is_color,
         enc, &datum);
     if (status == false) continue;
+    // CHECK(status) << " #" << line_id << " failed";
+    if (datum.height() != 256 || datum.width() != 256) {
+      LOG(ERROR) <<lines[line_id].first;
+    }
     if (check_size) {
       if (!data_size_initialized) {
         data_size = datum.channels() * datum.height() * datum.width();
@@ -136,17 +149,17 @@ int main(int argc, char** argv) {
     CHECK(datum.SerializeToString(&out));
     txn->Put(string(key_cstr, length), out);
 
-    if (++count % 1000 == 0) {
+    if ((line_id + 1) % 1000 == 0) {
       // Commit db
       txn->Commit();
       txn.reset(db->NewTransaction());
-      LOG(ERROR) << "Processed " << count << " files.";
+      LOG(ERROR) << "Processed " << line_id + 1 << " files.";
     }
   }
   // write the last batch
-  if (count % 1000 != 0) {
+  if ((line_id + 1) % 1000 != 0) {
     txn->Commit();
-    LOG(ERROR) << "Processed " << count << " files.";
+    LOG(ERROR) << "Processed " << line_id + 1 << " files.";
   }
   return 0;
 }

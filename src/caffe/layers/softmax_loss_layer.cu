@@ -40,9 +40,11 @@ void SoftmaxWithLossLayer<Dtype>::Forward_gpu(
   // Since this memory is not used for anything until it is overwritten
   // on the backward pass, we use it here to avoid having to allocate new GPU
   // memory to accumulate intermediate results in the kernel.
-  Dtype* loss_data = bottom[0]->mutable_gpu_diff();
+  // Dtype* loss_data = bottom[0]->mutable_gpu_diff();
   // Similarly, this memory is never used elsewhere, and thus we can use it
   // to avoid having to allocate additional GPU memory.
+  /* Cui: No, we don't want to do that. We use losses_ instead */
+  Dtype* loss_data = losses_.mutable_gpu_diff();
   Dtype* counts = prob_.mutable_gpu_diff();
   // NOLINT_NEXT_LINE(whitespace/operators)
   SoftmaxLossForwardGPU<Dtype><<<CAFFE_GET_BLOCKS(nthreads),
@@ -59,6 +61,7 @@ void SoftmaxWithLossLayer<Dtype>::Forward_gpu(
   }
   top[0]->mutable_cpu_data()[0] = loss;
   if (top.size() == 2) {
+    CHECK(0);
     top[1]->ShareData(prob_);
   }
 }

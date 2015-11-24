@@ -4,6 +4,10 @@
 #include <string>
 #include <vector>
 
+#include <boost/make_shared.hpp>
+
+#include <tbb/tick_count.h>
+
 #include "caffe/net.hpp"
 #include "caffe/proto/caffe.pb.h"
 #include "caffe/solver.hpp"
@@ -11,11 +15,16 @@
 #include "caffe/util/math_functions.hpp"
 #include "caffe/util/upgrade_proto.hpp"
 
+using std::cout;
+using std::cerr;
+using std::endl;
+using boost::make_shared;
+
 namespace caffe {
 
 template <typename Dtype>
-Solver<Dtype>::Solver(const SolverParameter& param)
-    : net_() {
+Solver<Dtype>::Solver(const SolverParameter& param, const PsConfig& ps_config)
+    : ps_config_(ps_config), net_() {
   Init(param);
 }
 
@@ -158,6 +167,1162 @@ void Solver<Dtype>::InitTestNets() {
   }
 }
 
+template <>
+void Solver<float>::InitPs() {
+  if (ps_config_.no_ps) {
+    return;
+  }
+
+  vector<shared_ptr<Layer<float> > >& layers = this->net_->layers_;
+  vector<string>& layer_types = this->net_->layer_types_;
+  vector<bool>& layer_need_backward = this->net_->layer_need_backward_;
+  vector<shared_ptr<Blob<float> > >& params = this->net_->params_;
+  layer_infos_.resize(layers.size());
+  int total_num_params = 0;
+  int table_id = 0;
+  int row_id = 0;
+  int local_store_row_id = 0;
+  int global_param_id = 0;
+
+  /* Decide row keys for model parameters */
+  // LOG(INFO) << "param sizes:";
+  for (int layer_id = 0; layer_id < layers.size(); layer_id++) {
+    shared_ptr<Layer<float> >& layer = layers[layer_id];
+    LayerInfo& layer_info = layer_infos_[layer_id];
+    int num_params = layer->blobs().size();
+    if (num_params > 0) {
+      layer_info.param_infos.resize(num_params);
+      layer_info.table_id = table_id;
+      total_num_params += num_params;
+      layer_info.num_vals = 0;
+      for (int param_id = 0; param_id < num_params; param_id++) {
+        shared_ptr<Blob<float> >& param = layer->blobs()[param_id];
+        layer_info.param_infos[param_id].val_offset = layer_info.num_vals;
+        layer_info.param_infos[param_id].global_param_id = global_param_id++;
+        layer_info.num_vals += param->count();
+      }
+      int num_rows = (layer_info.num_vals + ROW_DATA_SIZE - 1) / ROW_DATA_SIZE;
+      for (int i = 0; i < num_rows; i++) {
+        layer_info.row_ids.push_back(row_id++);
+        layer_info.history_data_row_ids.push_back(local_store_row_id++);
+      }
+      table_id++;
+      row_id = 0;
+    }
+    layer_info.fw_read_time = 0;
+    layer_info.fw_compute_time = 0;
+    layer_info.fw_write_time = 0;
+    layer_info.bw_read_time = 0;
+    layer_info.bw_compute_time = 0;
+    layer_info.bw_write_time = 0;
+  }
+  CHECK_EQ(total_num_params, params.size());
+  int num_tables = row_id == 0 ? table_id : table_id + 1;
+
+  /* Decide row keys for intermediate data blobs */
+  vector<shared_ptr<Blob<float> > >& imbs = this->net_->blobs_;
+  imb_data_infos_.resize(imbs.size());
+  // LOG(INFO) << "imbs.size() = " << imbs.size();
+  // LOG(INFO) << "imb sizes:" << imbs.size();
+  for (int imb_id = 0; imb_id < imbs.size(); imb_id++) {
+    RowAccessInfo& imb_info = imb_data_infos_[imb_id];
+    imb_info.num_vals = imbs[imb_id]->count();
+    cerr << "imbs[imb_id]->count() = " << imbs[imb_id]->count() << endl;
+    int num_rows = (imb_info.num_vals + ROW_DATA_SIZE - 1) / ROW_DATA_SIZE;
+    // cerr << num_rows << endl;
+    for (int i = 0; i < num_rows; i++) {
+      imb_info.row_ids.push_back(local_store_row_id++);
+    }
+    imb_info.data_in_mem = false;
+    imb_info.data_handle = -1;
+  }
+  /* Decide row keys for intermediate diff blobs */
+  imb_diff_infos_.resize(imbs.size());
+  for (int imb_id = 0; imb_id < imbs.size(); imb_id++) {
+    RowAccessInfo& imb_info = imb_diff_infos_[imb_id];
+    imb_info.num_vals = imbs[imb_id]->count();
+    int num_rows = (imb_info.num_vals + ROW_DATA_SIZE - 1) / ROW_DATA_SIZE;
+    for (int i = 0; i < num_rows; i++) {
+      imb_info.row_ids.push_back(local_store_row_id++);
+    }
+    imb_info.data_in_mem = false;
+    imb_info.data_handle = -1;
+  }
+
+  /* Count total size of params and imbs */
+  int input_size = 0;
+  int imb_size = 0;
+  int param_size = 0;
+  int update_size = 0;
+  for (int i = 0; i < imbs.size(); i++) {
+    if (i < 2) {
+      input_size += imbs[i]->count();
+    } else {
+      imb_size += imbs[i]->count();
+    }
+    /* Counting diffs */
+    imb_size += imbs[i]->count();
+  }
+  for (int i = 0; i < params.size(); i++) {
+    param_size += params[i]->count();
+    update_size += params[i]->count();
+    imb_size += params[i]->count();
+  }
+  cout << "Total sizes: " << endl;
+  cout << input_size << ',' << imb_size
+         << ',' << param_size << ',' << update_size << endl;
+
+  /* Decide which intermediate blobs to access/release at each layer */
+  vector<int>& net_output_blob_indices = this->net_->net_output_blob_indices_;
+  IntSet net_output_set;
+  for (int i = 0; i < net_output_blob_indices.size(); i++) {
+    net_output_set[net_output_blob_indices[i]] = FetchKeep();
+  }
+  for (int layer_id = 0; layer_id < layers.size(); layer_id++) {
+    LayerInfo& layer_info = layer_infos_[layer_id];
+    vector<int>& bottom_imb_ids = this->net_->bottom_id_vecs_[layer_id];
+    vector<int>& top_imb_ids = this->net_->top_id_vecs_[layer_id];
+    IntSet& imbs_used_fw = layer_info.imbs_used_fw;
+    IntSet& imb_diffs_used_fw = layer_info.imb_diffs_used_fw;
+    IntSet& imbs_used_bw = layer_info.imbs_used_bw;
+    IntSet& imb_diffs_used_bw = layer_info.imb_diffs_used_bw;
+    for (int i = 0; i < bottom_imb_ids.size(); i++) {
+      int blob_id = bottom_imb_ids[i];
+      if (net_output_set.count(blob_id)) {
+        /* Do not stream output blobs */
+        continue;
+      }
+      /* Use (fetch, keep) all bottom data blobs in the forward pass */
+      imbs_used_fw[blob_id] = FetchKeep(true, true);
+      /* Use (fetch, no keep) all bottom data blobs in the backward pass,
+       * except for data layers */
+      if (layer_types[layer_id] != "Data") {
+        imbs_used_bw[blob_id] = FetchKeep(true, false);
+      }
+      /* Use no bottom diff blobs in the forward pass */
+      /* Use (no fetch, keep) all bottom diff blobs in the backward pass,
+       * except for data layers */
+      if (layer_types[layer_id] != "Data") {
+        imb_diffs_used_bw[blob_id] = FetchKeep(false, true);
+      }
+    }
+    for (int i = 0; i < top_imb_ids.size(); i++) {
+      int blob_id = top_imb_ids[i];
+      if (net_output_set.count(blob_id)) {
+        /* Do not stream output blobs */
+        continue;
+      }
+      /* Use (no fetch, keep) all top data blobs in the forward pass */
+      imbs_used_fw[blob_id] = FetchKeep(false, true);
+      /* Use (no fetch, keep) the top diff blobs only in loss layers
+       * in the forward pass */
+      if (layer_types[layer_id] == "SoftmaxWithLoss") {
+        imb_diffs_used_fw[blob_id] = FetchKeep(false, true);
+      }
+      /* Use (fetch, no keep) the top data blobs only in ReLU, LRN, Pooling,
+       * and SoftmaxWithLoss layers in the backward pass */
+      if (layer_types[layer_id] == "ReLU" ||
+          layer_types[layer_id] == "LRN" ||
+          layer_types[layer_id] == "Pooling" ||
+          layer_types[layer_id] == "SoftmaxWithLoss") {
+        imbs_used_bw[blob_id] = FetchKeep(true, false);
+      }
+      /* Use (fetch, no keep) all top diff blobs in the backward pass,
+       * except for data layers */
+      if (layer_types[layer_id] != "Data") {
+        imb_diffs_used_bw[blob_id] = FetchKeep(true, false);
+      }
+    }
+    int total_count = 0;
+    for (IntSet::iterator i = imbs_used_fw.begin();
+         i != imbs_used_fw.end(); i++) {
+      int imb_id = i->first;
+      total_count += imbs[imb_id]->count();
+    }
+  }
+  cout << "\nForwardbackward per layer sizes:" << endl;
+  for (int layer_id = 0; layer_id < layers.size(); layer_id++) {
+    LayerInfo& layer_info = layer_infos_[layer_id];
+    int input_size = 0;
+    int imb_size = 0;
+    int param_size = 0;
+    int update_size = 0;
+    IntSet& imbs_used = layer_info.imbs_used_fw;
+    IntSet& imb_diffs_used = layer_info.imb_diffs_used_fw;
+    for (IntSet::iterator i = imbs_used.begin(); i != imbs_used.end(); i++) {
+      int imb_id = i->first;
+      if (imb_id < 2) {
+        input_size += imbs[imb_id]->count();
+      } else {
+        imb_size += imbs[imb_id]->count();
+      }
+    }
+    for (IntSet::iterator i = imb_diffs_used.begin();
+         i != imb_diffs_used.end(); i++) {
+      int imb_id = i->first;
+      imb_size += imbs[imb_id]->count();
+    }
+    param_size += layer_info.num_vals;
+    cout << layer_id << ',' << input_size << ',' << imb_size
+         << ',' << param_size << ',' << update_size << endl;
+  }
+  for (int layer_id = layer_infos_.size() - 1; layer_id >= 0; layer_id--) {
+    LayerInfo& layer_info = layer_infos_[layer_id];
+    int input_size = 0;
+    int imb_size = 0;
+    int param_size = 0;
+    int update_size = 0;
+    IntSet& imbs_used = layer_info.imbs_used_bw;
+    IntSet& imb_diffs_used = layer_info.imb_diffs_used_bw;
+    for (IntSet::iterator i = imbs_used.begin(); i != imbs_used.end(); i++) {
+      int imb_id = i->first;
+      if (imb_id < 2) {
+        input_size += imbs[imb_id]->count();
+      } else {
+        imb_size += imbs[imb_id]->count();
+      }
+    }
+    for (IntSet::iterator i = imb_diffs_used.begin();
+         i != imb_diffs_used.end(); i++) {
+      int imb_id = i->first;
+      imb_size += imbs[imb_id]->count();
+    }
+    param_size += layer_info.num_vals;
+    update_size += layer_info.num_vals;
+    imb_size += layer_info.num_vals;
+    cout << layer_id << ',' << input_size << ',' << imb_size
+         << ',' << param_size << ',' << update_size << endl;
+  }
+  cout << "\nForwardbackward two layer sizes:" << endl;
+  for (int layer_id = 0; layer_id < layers.size() - 1; layer_id++) {
+    LayerInfo& layer_info = layer_infos_[layer_id];
+    int input_size = 0;
+    int imb_size = 0;
+    int param_size = 0;
+    int update_size = 0;
+    IntSet& imbs_used = layer_info.imbs_used_fw;
+    IntSet& imb_diffs_used = layer_info.imb_diffs_used_fw;
+    for (IntSet::iterator i = imbs_used.begin(); i != imbs_used.end(); i++) {
+      int imb_id = i->first;
+      if (imb_id < 2) {
+        input_size += imbs[imb_id]->count();
+      } else {
+        imb_size += imbs[imb_id]->count();
+      }
+    }
+    for (IntSet::iterator i = imb_diffs_used.begin();
+         i != imb_diffs_used.end(); i++) {
+      int imb_id = i->first;
+      imb_size += imbs[imb_id]->count();
+    }
+    param_size += layer_info.num_vals;
+    LayerInfo& next_layer_info = layer_infos_[layer_id + 1];
+    IntSet& next_imbs_used = next_layer_info.imbs_used_fw;
+    IntSet& next_imb_diffs_used = next_layer_info.imb_diffs_used_fw;
+    for (IntSet::iterator i = next_imbs_used.begin();
+         i != next_imbs_used.end(); i++) {
+      int imb_id = i->first;
+      if (!imbs_used.count(imb_id)) {
+        if (imb_id < 2) {
+          input_size += imbs[imb_id]->count();
+        } else {
+          imb_size += imbs[imb_id]->count();
+        }
+      }
+    }
+    for (IntSet::iterator i = next_imb_diffs_used.begin();
+         i != next_imb_diffs_used.end(); i++) {
+      int imb_id = i->first;
+      if (!imb_diffs_used.count(imb_id)) {
+        imb_size += imbs[imb_id]->count();
+      }
+    }
+    param_size += next_layer_info.num_vals;
+    cout << layer_id << ',' << input_size << ',' << imb_size
+         << ',' << param_size << ',' << update_size << endl;
+  }
+  {
+    /* For the last layer */
+    int layer_id = layer_infos_.size() - 1;
+    LayerInfo& layer_info = layer_infos_[layer_id];
+    int input_size = 0;
+    int imb_size = 0;
+    int param_size = 0;
+    int update_size = 0;
+    IntSet& imbs_used = layer_info.imbs_used_bw;
+    IntSet& imb_diffs_used = layer_info.imb_diffs_used_bw;
+    for (IntSet::iterator i = imbs_used.begin(); i != imbs_used.end(); i++) {
+      int imb_id = i->first;
+      if (imb_id < 2) {
+        input_size += imbs[imb_id]->count();
+      } else {
+        imb_size += imbs[imb_id]->count();
+      }
+    }
+    for (IntSet::iterator i = imb_diffs_used.begin();
+         i != imb_diffs_used.end(); i++) {
+      int imb_id = i->first;
+      imb_size += imbs[imb_id]->count();
+    }
+    param_size += layer_info.num_vals;
+    update_size += layer_info.num_vals;
+    imb_size += layer_info.num_vals;
+    cout << layer_id << ',' << input_size << ',' << imb_size
+         << ',' << param_size << ',' << update_size << endl;
+  }
+  for (int layer_id = layer_infos_.size() - 1; layer_id >= 1; layer_id--) {
+    LayerInfo& layer_info = layer_infos_[layer_id];
+    int input_size = 0;
+    int imb_size = 0;
+    int param_size = 0;
+    int update_size = 0;
+    IntSet& imbs_used = layer_info.imbs_used_bw;
+    IntSet& imb_diffs_used = layer_info.imb_diffs_used_bw;
+    for (IntSet::iterator i = imbs_used.begin(); i != imbs_used.end(); i++) {
+      int imb_id = i->first;
+      if (imb_id < 2) {
+        input_size += imbs[imb_id]->count();
+      } else {
+        imb_size += imbs[imb_id]->count();
+      }
+    }
+    for (IntSet::iterator i = imb_diffs_used.begin();
+         i != imb_diffs_used.end(); i++) {
+      int imb_id = i->first;
+      imb_size += imbs[imb_id]->count();
+    }
+    param_size += layer_info.num_vals * 3;
+    LayerInfo& next_layer_info = layer_infos_[layer_id - 1];
+    IntSet& next_imbs_used = next_layer_info.imbs_used_bw;
+    IntSet& next_imb_diffs_used = next_layer_info.imb_diffs_used_bw;
+    for (IntSet::iterator i = next_imbs_used.begin();
+         i != next_imbs_used.end(); i++) {
+      int imb_id = i->first;
+      if (!imbs_used.count(imb_id)) {
+        if (imb_id < 2) {
+          input_size += imbs[imb_id]->count();
+        } else {
+          imb_size += imbs[imb_id]->count();
+        }
+      }
+    }
+    for (IntSet::iterator i = next_imb_diffs_used.begin();
+         i != next_imb_diffs_used.end(); i++) {
+      int imb_id = i->first;
+      if (!imb_diffs_used.count(imb_id)) {
+        imb_size += imbs[imb_id]->count();
+      }
+    }
+    param_size += layer_info.num_vals;
+    update_size += layer_info.num_vals;
+    imb_size += layer_info.num_vals;
+    cout << layer_id << ',' << input_size << ',' << imb_size
+         << ',' << param_size << ',' << update_size << endl;
+  }
+
+  /* Decide imbs to accesss/release in forward pass */
+  for (int layer_id = 0; layer_id < layers.size(); layer_id++) {
+    LayerInfo& layer_info = layer_infos_[layer_id];
+    IntSet& imbs_used = layer_info.imbs_used_fw;
+    IntSet& imb_diffs_used = layer_info.imb_diffs_used_fw;
+    /* Decide imbs to access in forward pass */
+    vector<ImbInfo>& imbs_to_access = layer_info.imbs_to_access_fw;
+    vector<ImbInfo>& imb_diffs_to_access = layer_info.imb_diffs_to_access_fw;
+    for (IntSet::iterator i = imbs_used.begin(); i != imbs_used.end(); i++) {
+      int imb_id = i->first;
+      if (!imb_data_infos_[imb_id].data_in_mem) {
+        imb_data_infos_[imb_id].data_in_mem = true;
+        ImbInfo imb_info;
+        imb_info.global_imb_id = imb_id;
+        imb_info.fetch = i->second.fetch;
+        imbs_to_access.push_back(imb_info);
+      }
+    }
+    for (IntSet::iterator i = imb_diffs_used.begin();
+         i != imb_diffs_used.end(); i++) {
+      int imb_id = i->first;
+      if (!imb_diff_infos_[imb_id].data_in_mem) {
+        imb_diff_infos_[imb_id].data_in_mem = true;
+        ImbInfo imb_info;
+        imb_info.global_imb_id = imb_id;
+        imb_info.fetch = i->second.fetch;
+        imb_diffs_to_access.push_back(imb_info);
+      }
+    }
+    /* Decide imbs to release in forward pass */
+    vector<ImbInfo>& imbs_to_release = layer_info.imbs_to_release_fw;
+    vector<ImbInfo>& imb_diffs_to_release = layer_info.imb_diffs_to_release_fw;
+    /* Release the blobs that are not used in the next layer */
+    IntSet& imbs_used_next_layer = layer_id < layers.size() - 1 ?
+        layer_infos_[layer_id + 1].imbs_used_fw :
+        layer_infos_[layer_id].imbs_used_bw;
+    for (IntSet::iterator i = imbs_used.begin(); i != imbs_used.end(); i++) {
+      int imb_id = i->first;
+      if (!imbs_used_next_layer.count(imb_id)) {
+        CHECK(imb_data_infos_[imb_id].data_in_mem);
+        imb_data_infos_[imb_id].data_in_mem = false;
+        ImbInfo imb_info;
+        imb_info.global_imb_id = imb_id;
+        imb_info.keep = i->second.keep;
+        imbs_to_release.push_back(imb_info);
+      }
+    }
+    IntSet& imb_diffs_used_next_layer = layer_id < layers.size() - 1 ?
+        layer_infos_[layer_id + 1].imb_diffs_used_fw :
+        layer_infos_[layer_id].imb_diffs_used_bw;
+    for (IntSet::iterator i = imb_diffs_used.begin();
+         i != imb_diffs_used.end(); i++) {
+      int imb_id = i->first;
+      if (!imb_diffs_used_next_layer.count(imb_id)) {
+        CHECK(imb_diff_infos_[imb_id].data_in_mem);
+        imb_diff_infos_[imb_id].data_in_mem = false;
+        ImbInfo imb_info;
+        imb_info.global_imb_id = imb_id;
+        imb_info.keep = i->second.keep;
+        imb_diffs_to_release.push_back(imb_info);
+      }
+    }
+  }
+  // /* Decide the last backward layer.
+   // * We assume all layers above it need backward.
+   // * Actually data layer is the only one that I think doesn't need backward. */
+  // /* Decide imbs to accesss/release in backward pass */
+  // int last_layer_needs_backward = -1;
+  // for (int layer_id = layer_infos_.size() - 1; layer_id >= 0; layer_id--) {
+    // if (layer_need_backward[layer_id]) {
+      // last_layer_needs_backward = layer_id;
+    // }
+  // }
+  for (int layer_id = layer_infos_.size() - 1; layer_id >= 0; layer_id--) {
+    if (!layer_need_backward[layer_id]) {
+      /* We assume only the data layer doesn't need backward */
+      // LOG(INFO) << "layer " << layer_id << " doesn't need backward";
+      continue;
+    }
+    LayerInfo& layer_info = layer_infos_[layer_id];
+    IntSet& imbs_used = layer_info.imbs_used_bw;
+    IntSet& imb_diffs_used = layer_info.imb_diffs_used_bw;
+    vector<ImbInfo>& imbs_to_access = layer_info.imbs_to_access_bw;
+    vector<ImbInfo>& imb_diffs_to_access = layer_info.imb_diffs_to_access_bw;
+    /* Decide imbs to access in backward pass */
+    for (IntSet::iterator i = imbs_used.begin(); i != imbs_used.end(); i++) {
+      int imb_id = i->first;
+      if (!imb_data_infos_[imb_id].data_in_mem) {
+        imb_data_infos_[imb_id].data_in_mem = true;
+        ImbInfo imb_info;
+        imb_info.global_imb_id = imb_id;
+        imb_info.fetch = i->second.fetch;
+        imbs_to_access.push_back(imb_info);
+      }
+    }
+    /* Decide imb diffs to access in backward pass */
+    for (IntSet::iterator i = imb_diffs_used.begin();
+         i != imb_diffs_used.end(); i++) {
+      int imb_id = i->first;
+      if (!imb_diff_infos_[imb_id].data_in_mem) {
+        imb_diff_infos_[imb_id].data_in_mem = true;
+        ImbInfo imb_info;
+        imb_info.global_imb_id = imb_id;
+        imb_info.fetch = i->second.fetch;
+        imb_diffs_to_access.push_back(imb_info);
+      }
+    }
+    /* Decide imbs to release in backward pass */
+    vector<ImbInfo>& imbs_to_release = layer_info.imbs_to_release_bw;
+    vector<ImbInfo>& imb_diffs_to_release = layer_info.imb_diffs_to_release_bw;
+    IntSet empty_set;
+    IntSet *imbs_used_next_layer_ptr = &empty_set;
+    int next_layer_id = layer_id - 1;
+    while (next_layer_id >= 0) {
+      if (layer_need_backward[next_layer_id]) {
+        imbs_used_next_layer_ptr =
+            &layer_infos_[next_layer_id].imbs_used_bw;
+        break;
+      }
+      next_layer_id--;
+    }
+    IntSet& imbs_used_next_layer = *imbs_used_next_layer_ptr;
+    for (IntSet::iterator i = imbs_used.begin(); i != imbs_used.end(); i++) {
+      int imb_id = i->first;
+      if (!imbs_used_next_layer.count(imb_id)) {
+        CHECK(imb_data_infos_[imb_id].data_in_mem);
+        imb_data_infos_[imb_id].data_in_mem = false;
+        ImbInfo imb_info;
+        imb_info.global_imb_id = imb_id;
+        imb_info.keep = i->second.keep;
+        imbs_to_release.push_back(imb_info);
+      }
+    }
+    IntSet *imb_diffs_used_next_layer_ptr = &empty_set;
+    next_layer_id = layer_id - 1;
+    while (next_layer_id >= 0) {
+      if (layer_need_backward[next_layer_id]) {
+        imb_diffs_used_next_layer_ptr =
+            &layer_infos_[next_layer_id].imb_diffs_used_bw;
+        break;
+      }
+      next_layer_id--;
+    }
+    IntSet& imb_diffs_used_next_layer = *imb_diffs_used_next_layer_ptr;
+    for (IntSet::iterator i = imb_diffs_used.begin();
+         i != imb_diffs_used.end(); i++) {
+      int imb_id = i->first;
+      if (!imb_diffs_used_next_layer.count(imb_id)) {
+        CHECK(imb_diff_infos_[imb_id].data_in_mem);
+        imb_diff_infos_[imb_id].data_in_mem = false;
+        ImbInfo imb_info;
+        imb_info.global_imb_id = imb_id;
+        imb_info.keep = i->second.keep;
+        imb_diffs_to_release.push_back(imb_info);
+      }
+    }
+  }
+  /* All blobs should have been released */
+  for (int i = 0; i < imb_data_infos_.size(); i++) {
+    CHECK(!imb_data_infos_[i].data_in_mem) << "i = " << i;
+  }
+  for (int i = 0; i < imb_diff_infos_.size(); i++) {
+    CHECK(!imb_diff_infos_[i].data_in_mem) << "i = " << i;
+  }
+
+  /* Print the size of imbs that need to be fetched */
+  cout << "\nSize of imbs that need to be fetched during forwardbackward:" << endl;
+  for (int layer_id = 0; layer_id < layer_infos_.size(); layer_id++) {
+    LayerInfo& layer_info = layer_infos_[layer_id];
+    int input_size = 0;
+    int imb_size = 0;
+    int param_size = 0;
+    int update_size = 0;
+    for (int i = 0; i < layer_info.imbs_to_access_fw.size(); i++) {
+      ImbInfo& imb_info = layer_info.imbs_to_access_fw[i];
+      int imb_id = imb_info.global_imb_id;
+      if (imb_id < 2) {
+        input_size += imbs[imb_id]->count();
+      } else {
+        imb_size += imbs[imb_id]->count();
+      }
+    }
+    /* Access intermediate diff blobs */
+    for (int i = 0; i < layer_info.imb_diffs_to_access_fw.size(); i++) {
+      ImbInfo& imb_info = layer_info.imb_diffs_to_access_fw[i];
+      int imb_id = imb_info.global_imb_id;
+      imb_size += imbs[imb_id]->count();
+    }
+    param_size += layer_info.num_vals;
+    cout << layer_id << ',' << input_size << ',' << imb_size
+         << ',' << param_size << ',' << update_size << endl;
+  }
+  for (int layer_id = layer_infos_.size() - 1; layer_id >= 0; layer_id--) {
+    LayerInfo& layer_info = layer_infos_[layer_id];
+    int input_size = 0;
+    int imb_size = 0;
+    int param_size = 0;
+    int update_size = 0;
+    for (int i = 0; i < layer_info.imbs_to_access_bw.size(); i++) {
+      ImbInfo& imb_info = layer_info.imbs_to_access_bw[i];
+      int imb_id = imb_info.global_imb_id;
+      if (imb_id < 2) {
+        input_size += imbs[imb_id]->count();
+      } else {
+        imb_size += imbs[imb_id]->count();
+      }
+    }
+    /* Access intermediate diff blobs */
+    for (int i = 0; i < layer_info.imb_diffs_to_access_bw.size(); i++) {
+      ImbInfo& imb_info = layer_info.imb_diffs_to_access_bw[i];
+      int imb_id = imb_info.global_imb_id;
+      imb_size += imbs[imb_id]->count();
+    }
+    param_size += layer_info.num_vals;
+    update_size += layer_info.num_vals;
+    imb_size += layer_info.num_vals;
+    cout << layer_id << ',' << input_size << ',' << imb_size
+         << ',' << param_size << ',' << update_size << endl;
+  }
+
+  int64_t total_size = 0;
+  int64_t read_size = 0;
+  int64_t write_size = 0;
+  for (int layer_id = 0; layer_id < layer_infos_.size(); layer_id++) {
+    LayerInfo& layer_info = layer_infos_[layer_id];
+    layer_info.layer_handles.resize(ps_config_.batches_per_clock);
+    for (int batch_id = 0; batch_id < ps_config_.batches_per_clock; batch_id++) {
+      LayerHandles& layer_handles = layer_info.layer_handles[batch_id];
+      layer_handles.imbs_to_access_fw.resize(layer_info.imbs_to_access_fw.size());
+      layer_handles.imbs_to_release_fw.resize(layer_info.imbs_to_release_fw.size());
+      layer_handles.imb_diffs_to_access_fw.resize(layer_info.imb_diffs_to_access_fw.size());
+      layer_handles.imb_diffs_to_release_fw.resize(layer_info.imb_diffs_to_release_fw.size());
+      layer_handles.imbs_to_access_bw.resize(layer_info.imbs_to_access_bw.size());
+      layer_handles.imbs_to_release_bw.resize(layer_info.imbs_to_release_bw.size());
+      layer_handles.imb_diffs_to_access_bw.resize(layer_info.imb_diffs_to_access_bw.size());
+      layer_handles.imb_diffs_to_release_bw.resize(layer_info.imb_diffs_to_release_bw.size());
+    }
+  }
+
+
+  /* Initialize LazyTable */
+  ps_config_.lt_config.num_tables = num_tables;
+  ps_ = make_shared<LazyTableModule>(
+      ps_config_.worker_id, ps_config_.lt_config);
+  ps_->thread_start();
+
+  /* Virtual iteration */ 
+  for (int batch_id = 0; batch_id < ps_config_.batches_per_clock; batch_id++) {
+    /* Virtual iteration, forward pass */
+    for (int layer_id = 0; layer_id < layer_infos_.size(); layer_id++) {
+      LayerInfo& layer_info = layer_infos_[layer_id];
+      LayerHandles& layer_handles = layer_info.layer_handles[batch_id];
+      /* Access intermediate data blobs */
+      for (int i = 0; i < layer_info.imbs_to_access_fw.size(); i++) {
+        ImbInfo& imb_info = layer_info.imbs_to_access_fw[i];
+        RowAccessInfo& access_info = imb_data_infos_[imb_info.global_imb_id];
+        CHECK_LT(i, layer_handles.imbs_to_access_fw.size());
+        int& handle = layer_handles.imbs_to_access_fw[i];
+        handle = ps_->virtual_localaccess_batch(
+            access_info.row_ids, access_info.num_vals, imb_info.fetch);
+        access_info.data_handle = handle;
+        total_size += access_info.num_vals;
+        read_size += imb_info.fetch ? access_info.num_vals : 0;
+        CHECK_GE(read_size, 0);
+      }
+      /* Access intermediate diff blobs */
+      for (int i = 0; i < layer_info.imb_diffs_to_access_fw.size(); i++) {
+        ImbInfo& imb_info = layer_info.imb_diffs_to_access_fw[i];
+        RowAccessInfo& access_info = imb_diff_infos_[imb_info.global_imb_id];
+        CHECK_LT(i, layer_handles.imb_diffs_to_access_fw.size());
+        int& handle = layer_handles.imb_diffs_to_access_fw[i];
+        handle = ps_->virtual_localaccess_batch(
+            access_info.row_ids, access_info.num_vals, imb_info.fetch);
+        access_info.data_handle = handle;
+        total_size += access_info.num_vals;
+        read_size += imb_info.fetch ? access_info.num_vals : 0;
+        CHECK_GE(read_size, 0);
+      }
+      /* Read model parameters */
+      if (layer_info.param_infos.size()) {
+        layer_handles.read_handle = ps_->virtual_read_batch(
+            layer_info.table_id, layer_info.row_ids,
+            ps_config_.slack, layer_info.num_vals);
+      }
+      /* Release intermediate data blobs */
+      for (int i = 0; i < layer_info.imbs_to_release_fw.size(); i++) {
+        ImbInfo& imb_info = layer_info.imbs_to_release_fw[i];
+        RowAccessInfo& access_info = imb_data_infos_[imb_info.global_imb_id];
+        CHECK_GE(access_info.data_handle, 0);
+        CHECK_LT(i, layer_handles.imbs_to_release_fw.size());
+        int& handle = layer_handles.imbs_to_release_fw[i];
+        handle = ps_->virtual_postlocalaccess_batch(
+            access_info.data_handle, imb_info.keep);
+        access_info.data_handle = -1;
+        write_size += imb_info.keep ? access_info.num_vals : 0;
+        CHECK_GE(write_size, 0);
+      }
+      /* Release intermediate diff blobs */
+      for (int i = 0; i < layer_info.imb_diffs_to_release_fw.size(); i++) {
+        ImbInfo& imb_info = layer_info.imb_diffs_to_release_fw[i];
+        RowAccessInfo& access_info = imb_diff_infos_[imb_info.global_imb_id];
+        CHECK_GE(access_info.data_handle, 0);
+        CHECK_LT(i, layer_handles.imb_diffs_to_release_fw.size());
+        int& handle = layer_handles.imb_diffs_to_release_fw[i];
+        handle = ps_->virtual_postlocalaccess_batch(
+            access_info.data_handle, imb_info.keep);
+        access_info.data_handle = -1;
+        write_size += imb_info.keep ? access_info.num_vals : 0;
+        CHECK_GE(write_size, 0);
+      }
+      /* Release model parameters */
+      if (layer_info.param_infos.size()) {
+        layer_handles.postread_handle = ps_->virtual_postread_batch(
+            layer_handles.read_handle);
+      }
+    }
+    /* Virtual iteration, backward pass */
+    for (int layer_id = layer_infos_.size() - 1; layer_id >= 0; layer_id--) {
+      if (!layer_need_backward[layer_id]) {
+        /* We assume only the data layer doesn't need backward */
+        continue;
+      }
+      LayerInfo& layer_info = layer_infos_[layer_id];
+      LayerHandles& layer_handles = layer_info.layer_handles[batch_id];
+      /* Access intermediate data blobs */
+      for (int i = 0; i < layer_info.imbs_to_access_bw.size(); i++) {
+        ImbInfo& imb_info = layer_info.imbs_to_access_bw[i];
+        CHECK_LT(imb_info.global_imb_id, imb_data_infos_.size());
+        RowAccessInfo& access_info = imb_data_infos_[imb_info.global_imb_id];
+        CHECK_LT(i, layer_handles.imbs_to_access_bw.size());
+        int& handle = layer_handles.imbs_to_access_bw[i];
+        handle = ps_->virtual_localaccess_batch(
+            access_info.row_ids, access_info.num_vals, imb_info.fetch);
+        access_info.data_handle = handle;
+        total_size += access_info.num_vals;
+        read_size += imb_info.fetch ? access_info.num_vals : 0;
+        CHECK_GE(read_size, 0);
+      }
+      /* Access intermediate diff blobs */
+      for (int i = 0; i < layer_info.imb_diffs_to_access_bw.size(); i++) {
+        ImbInfo& imb_info = layer_info.imb_diffs_to_access_bw[i];
+        CHECK_LT(imb_info.global_imb_id, imb_diff_infos_.size());
+        RowAccessInfo& access_info = imb_diff_infos_[imb_info.global_imb_id];
+        CHECK_LT(i, layer_handles.imb_diffs_to_access_bw.size());
+        int& handle = layer_handles.imb_diffs_to_access_bw[i];
+        handle = ps_->virtual_localaccess_batch(
+            access_info.row_ids, access_info.num_vals, imb_info.fetch);
+        access_info.data_handle = handle;
+        total_size += access_info.num_vals;
+        read_size += imb_info.fetch ? access_info.num_vals : 0;
+        CHECK_GE(read_size, 0);
+      }
+      /* Read and prewrite model parameters */
+      if (layer_info.param_infos.size()) {
+        layer_handles.prewrite_handle = ps_->virtual_prewrite_batch(
+            layer_info.table_id, layer_info.row_ids, layer_info.num_vals);
+        layer_handles.bw_read_handle = ps_->virtual_read_batch(
+            layer_info.table_id, layer_info.row_ids,
+            ps_config_.slack, layer_info.num_vals);
+        layer_handles.history_access_handle =
+            ps_->virtual_localaccess_batch(
+                layer_info.history_data_row_ids, layer_info.num_vals,
+                /* fetch */ true);
+      }
+      /* Postaccess intermediate data blobs */
+      for (int i = 0; i < layer_info.imbs_to_release_bw.size(); i++) {
+        ImbInfo& imb_info = layer_info.imbs_to_release_bw[i];
+        CHECK_LT(imb_info.global_imb_id, imb_data_infos_.size());
+        RowAccessInfo& access_info = imb_data_infos_[imb_info.global_imb_id];
+        CHECK_GE(access_info.data_handle, 0);
+        CHECK_LT(i, layer_handles.imbs_to_release_bw.size());
+        int& handle = layer_handles.imbs_to_release_bw[i];
+        handle = ps_->virtual_postlocalaccess_batch(
+            access_info.data_handle, imb_info.keep);
+        access_info.data_handle = -1;
+        write_size += imb_info.keep ? access_info.num_vals : 0;
+        CHECK_GE(write_size, 0);
+      }
+      /* Postaccess intermediate diff blobs */
+      for (int i = 0; i < layer_info.imb_diffs_to_release_bw.size(); i++) {
+        ImbInfo& imb_info = layer_info.imb_diffs_to_release_bw[i];
+        CHECK_LT(imb_info.global_imb_id, imb_diff_infos_.size());
+        RowAccessInfo& access_info = imb_diff_infos_[imb_info.global_imb_id];
+        CHECK_GE(access_info.data_handle, 0);
+        CHECK_LT(i, layer_handles.imb_diffs_to_release_bw.size());
+        int& handle = layer_handles.imb_diffs_to_release_bw[i];
+        handle = ps_->virtual_postlocalaccess_batch(
+            access_info.data_handle, imb_info.keep);
+        access_info.data_handle = -1;
+        write_size += imb_info.keep ? access_info.num_vals : 0;
+        CHECK_GE(write_size, 0);
+      }
+      /* Postread and write model parameters */
+      if (layer_info.param_infos.size()) {
+        layer_handles.write_handle = ps_->virtual_write_batch(
+            layer_handles.prewrite_handle);
+        layer_handles.bw_postread_handle = ps_->virtual_postread_batch(
+            layer_handles.bw_read_handle);
+        layer_handles.history_postaccess_handle =
+            ps_->virtual_postlocalaccess_batch(
+                layer_handles.history_access_handle, /* keep */ true);
+      }
+    }
+  }
+  ps_->virtual_clock();
+  ps_->finish_virtual_iteration();
+  LOG(INFO) << "Virtual iteration done";
+  cout << "total_size = " << total_size << endl;
+  cout << "read_size = " << read_size << endl;
+  cout << "write_size = " << write_size << endl;
+
+  /* Set initial parameter values */
+  if (ps_config_.worker_id == 0) {
+    for (int layer_id = 0; layer_id < layer_infos_.size(); layer_id++) {
+      shared_ptr<Layer<float> >& layer = layers[layer_id];
+      LayerInfo& layer_info = layer_infos_[layer_id];
+      LayerHandles& layer_handles = layer_info.layer_handles[0];
+      if (layer_info.param_infos.size()) {
+        /* Pre-write */
+        RowOpVal *inc_buffer;
+        ps_->preinc_batch(&inc_buffer, layer_handles.prewrite_handle);
+        float *params_vals = reinterpret_cast<float *>(inc_buffer);
+        for (int param_id = 0;
+            param_id < layer_info.param_infos.size(); param_id++) {
+          int param_val_offset = layer_info.param_infos[param_id].val_offset;
+          float *param_vals = &params_vals[param_val_offset];
+          shared_ptr<Blob<float> >& param = layer->blobs()[param_id];
+          param->set_gpu_data(param_vals, false);
+          /* "false" means that we don't change head here,
+           * because we want to keep what's currently in CPU memory */
+        }
+      }
+      /* Let the layer initialize values */
+      layer->InitializeValues();
+      if (layer_info.param_infos.size()) {
+        /* Write */
+        for (int param_id = 0;
+            param_id < layer_info.param_infos.size(); param_id++) {
+          /* Values are filled in CPU memory, do a gpu_data() call to copy them
+           * to GPU memory */
+          shared_ptr<Blob<float> >& param = layer->blobs()[param_id];
+          param->gpu_data();
+          // const float *param_data = param->gpu_data();
+          // float param_dot;
+          // caffe_gpu_dot<float>(param->count(), param_data, param_data, &param_dot);
+          // LOG(INFO) << "param_dot = " << param_dot;
+          param->set_gpu_data(NULL, true);
+          /* "true" means that we don't keep CPU data */
+        }
+        ps_->inc_batch(layer_handles.write_handle);
+      }
+    }
+  }
+  LOG(INFO) << "Set initial parameter values done";
+  ps_->iterate();
+  ps_->start_opseq();
+  LOG(INFO) << "opseq started";
+}
+
+template <>
+float SGDSolver<float>::ForwardBackwardUsingPs(
+    const vector<Blob<float>* >& bottom,
+    const shared_ptr<Net<float> >& net, bool test) {
+  vector<shared_ptr<Layer<float> > >& layers = net->layers_;
+  vector<vector<Blob<float>*> >& bottom_vecs = net->bottom_vecs_;
+  vector<vector<Blob<float>*> >& top_vecs = net->top_vecs_;
+  vector<bool>& layer_need_backward = net->layer_need_backward_;
+  vector<vector<bool> >& bottom_need_backward = net->bottom_need_backward_;
+  vector<shared_ptr<Blob<float> > >& imbs = net->blobs_;
+  vector<string>& layer_names = net->layer_names_;
+  tbb::tick_count tick_start;
+
+  // if (test) {
+    // LOG(INFO) << "TEST";
+  // } else {
+    // LOG(INFO) << "TRAIN";
+  // }
+
+  /* Forward */
+  // LOG(INFO) << "Forward";
+  float loss = 0;
+  for (int batch_id = 0; batch_id < ps_config_.batches_per_clock; batch_id++) {
+    for (int layer_id = 0; layer_id < layer_infos_.size(); layer_id++) {
+      // LOG(INFO) << "Layer " << layer_id << ": " << layer_names[layer_id];
+      CHECK_LT(layer_id, layers.size());
+      shared_ptr<Layer<float> >& layer = layers[layer_id];
+      CHECK(layer);
+      LayerInfo& layer_info = layer_infos_[layer_id];
+      LayerHandles& layer_handles = layer_info.layer_handles[batch_id];
+
+      /* Access intermediate data blobs */
+      tick_start = tbb::tick_count::now();
+      // LOG(INFO) << "Read intermediate data blobs";
+      for (int i = 0; i < layer_info.imbs_to_access_fw.size(); i++) {
+        ImbInfo& imb_info = layer_info.imbs_to_access_fw[i];
+        CHECK_LT(i, layer_handles.imbs_to_access_fw.size());
+        int handle = layer_handles.imbs_to_access_fw[i];
+        // LOG(INFO) << "Read data " << imb_info.global_imb_id;
+        CHECK_LT(imb_info.global_imb_id, imbs.size());
+        shared_ptr<Blob<float> >& imb = imbs[imb_info.global_imb_id];
+        RowOpVal *read_buffer;
+        ps_->localaccess_batch(&read_buffer, handle);
+        CHECK(!imb->check_gpu_data())
+            << "layer " << layer_names[layer_id] << " has gpu data "
+            << imb_info.global_imb_id;
+        imb->set_gpu_data(reinterpret_cast<float *>(read_buffer), true);
+      }
+      /* Access intermediate diff blobs */
+      // LOG(INFO) << "Read intermediate diff blobs";
+      for (int i = 0; i < layer_info.imb_diffs_to_access_fw.size(); i++) {
+        ImbInfo& imb_info = layer_info.imb_diffs_to_access_fw[i];
+        CHECK_LT(i, layer_handles.imb_diffs_to_access_fw.size());
+        int handle = layer_handles.imb_diffs_to_access_fw[i];
+        // LOG(INFO) << "Read data " << imb_info.global_imb_id;
+        CHECK_LT(imb_info.global_imb_id, imbs.size());
+        shared_ptr<Blob<float> >& imb = imbs[imb_info.global_imb_id];
+        RowOpVal *read_buffer;
+        ps_->localaccess_batch(&read_buffer, handle);
+        // LOG(INFO) << "buffer = " << read_buffer;
+        CHECK(!imb->check_gpu_diff())
+            << "layer " << layer_names[layer_id] << " has gpu diff";
+        imb->set_gpu_diff(reinterpret_cast<float *>(read_buffer), true);
+      }
+      /* Read model parameters */
+      if (layer_info.param_infos.size()) {
+        // LOG(INFO) << "Read params";
+        RowOpVal *read_buffer;
+        ps_->read_batch(&read_buffer, layer_handles.read_handle);
+        float *params_vals = reinterpret_cast<float *>(read_buffer);
+        for (int param_id = 0;
+            param_id < layer_info.param_infos.size(); param_id++) {
+          int param_val_offset = layer_info.param_infos[param_id].val_offset;
+          float *param_vals = &params_vals[param_val_offset];
+          shared_ptr<Blob<float> >& param = layer->blobs()[param_id];
+          CHECK(!param->check_gpu_data())
+              << "layer " << layer_names[layer_id] << " has gpu param";
+          param->set_gpu_data(param_vals, true);
+        }
+      }
+      CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
+      if (!test) {
+        layer_info.fw_read_time += (tbb::tick_count::now() - tick_start).seconds();
+      }
+
+      /* Forward calculation */
+      // LOG(INFO) << "Forward calculation";
+      tick_start = tbb::tick_count::now();
+      float layer_loss =
+          layer->Forward(bottom_vecs[layer_id], top_vecs[layer_id]);
+      CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
+      // LOG(INFO) << "layer_loss = " << layer_loss;
+      loss += layer_loss;
+      if (!test) {
+        layer_info.fw_compute_time += (tbb::tick_count::now() - tick_start).seconds();
+      }
+
+      /* Release intermediate data blobs */
+      tick_start = tbb::tick_count::now();
+      // LOG(INFO) << "Release intermediate data blobs";
+      for (int i = 0; i < layer_info.imbs_to_release_fw.size(); i++) {
+        ImbInfo& imb_info = layer_info.imbs_to_release_fw[i];
+        CHECK_LT(i, layer_handles.imbs_to_release_fw.size());
+        int handle = layer_handles.imbs_to_release_fw[i];
+        // LOG(INFO) << "Release data " << imb_info.global_imb_id;
+        shared_ptr<Blob<float> >& imb = imbs[imb_info.global_imb_id];
+        imb->gpu_data();
+           /* Make sure everything is copied to GPU memory */
+        imb->set_gpu_data(NULL, true);
+        ps_->postlocalaccess_batch(handle);
+      }
+      /* Release intermediate diff blobs */
+      // LOG(INFO) << "Release intermediate diff blobs";
+      for (int i = 0; i < layer_info.imb_diffs_to_release_fw.size(); i++) {
+        ImbInfo& imb_info = layer_info.imb_diffs_to_release_fw[i];
+        CHECK_LT(i, layer_handles.imb_diffs_to_release_fw.size());
+        int handle = layer_handles.imb_diffs_to_release_fw[i];
+        // LOG(INFO) << "Release data " << imb_info.global_imb_id;
+        shared_ptr<Blob<float> >& imb = imbs[imb_info.global_imb_id];
+        imb->gpu_diff();
+           /* Make sure everything is copied to GPU memory */
+        imb->set_gpu_diff(NULL, true);
+        ps_->postlocalaccess_batch(handle);
+      }
+      /* Release read buffers */
+      if (layer_info.param_infos.size()) {
+        // LOG(INFO) << "Release read buffers";
+        for (int param_id = 0;
+            param_id < layer_info.param_infos.size(); param_id++) {
+          shared_ptr<Blob<float> >& param = layer->blobs()[param_id];
+          param->set_gpu_data(NULL, true);
+        }
+        ps_->postread_batch(layer_handles.postread_handle);
+      }
+      CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
+      if (!test) {
+        layer_info.fw_write_time += (tbb::tick_count::now() - tick_start).seconds();
+      }
+    }
+
+    /* Backward */
+    // LOG(INFO) << "Backward";
+    for (int layer_id = layer_infos_.size() - 1; layer_id >= 0; layer_id--) {
+      // LOG(INFO) << "Layer " << layer_id << ": " << layer_names[layer_id];
+      CHECK_LT(layer_id, layer_need_backward.size());
+      if (!test && !layer_need_backward[layer_id]) {
+        continue;
+      }
+      CHECK_LT(layer_id, layers.size());
+      shared_ptr<Layer<float> >& layer = layers[layer_id];
+      CHECK(layer);
+      LayerInfo& layer_info = layer_infos_[layer_id];
+      LayerHandles& layer_handles = layer_info.layer_handles[batch_id];
+
+      /* Access intermediate data blobs */
+      tick_start = tbb::tick_count::now();
+      for (int i = 0; i < layer_info.imbs_to_access_bw.size(); i++) {
+        ImbInfo& imb_info = layer_info.imbs_to_access_bw[i];
+        CHECK_LT(i, layer_handles.imbs_to_access_bw.size());
+        int handle = layer_handles.imbs_to_access_bw[i];
+        // LOG(INFO) << "Read data " << imb_info.global_imb_id;
+        shared_ptr<Blob<float> >& imb = imbs[imb_info.global_imb_id];
+        RowOpVal *imb_buffer;
+        ps_->localaccess_batch(&imb_buffer, handle);
+        CHECK(!imb->check_gpu_data())
+            << "layer " << layer_names[layer_id] << " has gpu data";
+        imb->set_gpu_data(reinterpret_cast<float *>(imb_buffer), true);
+      }
+      /* Access intermediate diff blobs */
+      for (int i = 0; i < layer_info.imb_diffs_to_access_bw.size(); i++) {
+        ImbInfo& imb_info = layer_info.imb_diffs_to_access_bw[i];
+        CHECK_LT(i, layer_handles.imb_diffs_to_access_bw.size());
+        int handle = layer_handles.imb_diffs_to_access_bw[i];
+        // LOG(INFO) << "Read diff " << imb_info.global_imb_id;
+        shared_ptr<Blob<float> >& imb = imbs[imb_info.global_imb_id];
+        RowOpVal *imb_buffer;
+        ps_->localaccess_batch(&imb_buffer, handle);
+        CHECK(!imb->check_gpu_diff())
+            << "layer " << layer_names[layer_id] << " has gpu diff";
+        imb->set_gpu_diff(reinterpret_cast<float *>(imb_buffer), true);
+      }
+      if (layer_info.param_infos.size()) {
+        /* Prepare write buffers */
+        // LOG(INFO) << "Prepare write buffers";
+        RowOpVal *write_buffer;
+        ps_->preinc_batch(&write_buffer, layer_handles.prewrite_handle);
+        float *write_params_vals = reinterpret_cast<float *>(write_buffer);
+        size_t size = layer_info.num_vals * sizeof(float);
+        CUDA_CHECK(cudaMemsetAsync(
+            write_params_vals, 0, size, Caffe::cuda_stream()));
+        CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
+        for (int param_id = 0;
+            param_id < layer_info.param_infos.size(); param_id++) {
+          int param_val_offset = layer_info.param_infos[param_id].val_offset;
+          float *param_vals = &write_params_vals[param_val_offset];
+          shared_ptr<Blob<float> >& param = layer->blobs()[param_id];
+          param->set_gpu_diff(param_vals, true);
+          /* "true" means that we don't keep CPU data */
+        }
+        /* Read params */
+        // LOG(INFO) << "Read params";
+        RowOpVal *read_buffer;
+        ps_->read_batch(&read_buffer, layer_handles.bw_read_handle);
+        float *read_params_vals = reinterpret_cast<float *>(read_buffer);
+        for (int param_id = 0;
+            param_id < layer_info.param_infos.size(); param_id++) {
+          int param_val_offset = layer_info.param_infos[param_id].val_offset;
+          float *param_vals = &read_params_vals[param_val_offset];
+          shared_ptr<Blob<float> >& param = layer->blobs()[param_id];
+          param->set_gpu_data(param_vals, true);
+        }
+        /* Access local updates history */
+        RowOpVal *history_buffer;
+        ps_->localaccess_batch(&history_buffer, layer_handles.history_access_handle);
+        float *history_vals = reinterpret_cast<float *>(history_buffer);
+        for (int param_id = 0;
+            param_id < layer_info.param_infos.size(); param_id++) {
+          int param_val_offset = layer_info.param_infos[param_id].val_offset;
+          float *history_param_vals = &history_vals[param_val_offset];
+          int global_param_id = layer_info.param_infos[param_id].global_param_id;
+          history_[global_param_id]->set_gpu_data(history_param_vals, true);
+        }
+      }
+      CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
+      if (!test) {
+        layer_info.bw_read_time += (tbb::tick_count::now() - tick_start).seconds();
+      }
+
+      if (!test) {
+        /* Backward calculation */
+        // LOG(INFO) << "Backward calculation";
+        tick_start = tbb::tick_count::now();
+        layer->Backward(top_vecs[layer_id], bottom_need_backward[layer_id],
+            bottom_vecs[layer_id]);
+        CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
+        /* Compute diff */
+        // LOG(INFO) << "Compute diff";
+        layer->ComputeDiff(top_vecs[layer_id], bottom_need_backward[layer_id],
+            bottom_vecs[layer_id]);
+        CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
+        layer_info.bw_compute_time += (tbb::tick_count::now() - tick_start).seconds();
+      }
+
+      /* Release intermediate data blobs */
+      // LOG(INFO) << "Release intermediate data blobs";
+      tick_start = tbb::tick_count::now();
+      for (int i = 0; i < layer_info.imbs_to_release_bw.size(); i++) {
+        ImbInfo& imb_info = layer_info.imbs_to_release_bw[i];
+        CHECK_LT(i, layer_handles.imbs_to_release_bw.size());
+        int handle = layer_handles.imbs_to_release_bw[i];
+        // LOG(INFO) << "Release data " << imb_info.global_imb_id;
+        shared_ptr<Blob<float> >& imb = imbs[imb_info.global_imb_id];
+        imb->gpu_data();
+          /* Make sure everything is copied to GPU memory */
+        imb->set_gpu_data(NULL, true);
+        ps_->postlocalaccess_batch(handle);
+      }
+      /* Release intermediate diff blobs */
+      // LOG(INFO) << "Release intermediate diff blobs";
+      for (int i = 0; i < layer_info.imb_diffs_to_release_bw.size(); i++) {
+        ImbInfo& imb_info = layer_info.imb_diffs_to_release_bw[i];
+        CHECK_LT(i, layer_handles.imb_diffs_to_release_bw.size());
+        int handle = layer_handles.imb_diffs_to_release_bw[i];
+        // LOG(INFO) << "Release diff " << imb_info.global_imb_id;
+        shared_ptr<Blob<float> >& imb = imbs[imb_info.global_imb_id];
+        imb->gpu_diff();
+          /* Make sure everything is copied to GPU memory */
+        imb->set_gpu_diff(NULL, true);
+        ps_->postlocalaccess_batch(handle);
+      }
+      CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
+      if (!test) {
+        layer_info.bw_write_time += (tbb::tick_count::now() - tick_start).seconds();
+      }
+
+      if (layer_info.param_infos.size()) {
+        // LOG(INFO) << "Finish writing";
+        tick_start = tbb::tick_count::now();
+        for (int param_id = 0;
+            param_id < layer_info.param_infos.size(); param_id++) {
+          int global_param_id = layer_info.param_infos[param_id].global_param_id;
+          if (!test) {
+            /* Adjust gradient */
+            float rate = GetLearningRate();
+            // Normalize(global_param_id);
+            Regularize(global_param_id);
+            // LOG(INFO) << "ComputeUpdateValue";
+            ComputeUpdateValue(global_param_id, rate);
+            CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
+          }
+          shared_ptr<Blob<float> >& param = layer->blobs()[param_id];
+          param->gpu_diff();
+            /* Make sure everything is copied to GPU memory */
+          param->set_gpu_diff(NULL, true);
+        }
+        if (!test) {
+          layer_info.bw_compute_time += (tbb::tick_count::now() - tick_start).seconds();
+        }
+
+        tick_start = tbb::tick_count::now();
+        /* Apply updates to PS */
+        ps_->inc_batch(layer_handles.write_handle);
+        /* Release read buffers */
+        // LOG(INFO) << "Release read buffers";
+        for (int param_id = 0;
+            param_id < layer_info.param_infos.size(); param_id++) {
+          shared_ptr<Blob<float> >& param = layer->blobs()[param_id];
+          param->set_gpu_data(NULL, true);
+        }
+        ps_->postread_batch(layer_handles.bw_postread_handle);
+        /* Release local updates history */
+        for (int param_id = 0;
+            param_id < layer_info.param_infos.size(); param_id++) {
+          int global_param_id = layer_info.param_infos[param_id].global_param_id;
+          history_[global_param_id]->gpu_data();
+            /* Make sure everything is copied to GPU memory */
+          history_[global_param_id]->set_gpu_data(NULL, true);
+        }
+        ps_->postlocalaccess_batch(layer_handles.history_postaccess_handle);
+        CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
+        if (!test) {
+          layer_info.bw_write_time += (tbb::tick_count::now() - tick_start).seconds();
+        }
+      }
+    }
+  }
+  ps_->iterate();
+  loss /= ps_config_.batches_per_clock;
+  return loss;
+}
+
+template <>
+void Solver<double>::InitPs() {
+  CHECK(0);
+}
+
+template <>
+double SGDSolver<double>::ForwardBackwardUsingPs(
+    const vector<Blob<double>* > & bottom,
+    const shared_ptr<Net<double> >& net, bool test) {
+  CHECK(0);
+  return 0;
+}
+
 template <typename Dtype>
 void Solver<Dtype>::Step(int iters) {
   vector<Blob<Dtype>*> bottom_vec;
@@ -167,26 +1332,15 @@ void Solver<Dtype>::Step(int iters) {
   vector<Dtype> losses;
   Dtype smoothed_loss = 0;
 
-  while (iter_ < stop_iter) {
-    // zero-init the params
-    for (int i = 0; i < net_->params().size(); ++i) {
-      shared_ptr<Blob<Dtype> > blob = net_->params()[i];
-      switch (Caffe::mode()) {
-      case Caffe::CPU:
-        caffe_set(blob->count(), static_cast<Dtype>(0),
-            blob->mutable_cpu_diff());
-        break;
-      case Caffe::GPU:
-#ifndef CPU_ONLY
-        caffe_gpu_set(blob->count(), static_cast<Dtype>(0),
-            blob->mutable_gpu_diff());
-#else
-        NO_GPU;
-#endif
-        break;
-      }
-    }
+  InitPs();
 
+  double read_ps_time = 0.0;
+  double compute_time = 0.0;
+  double adjust_update_time = 0.0;
+  double update_ps_time = 0.0;
+  tbb::tick_count tick_start = tbb::tick_count::now();
+
+  while (iter_ < stop_iter) {
     if (param_.test_interval() && iter_ % param_.test_interval() == 0
         && (iter_ > 0 || param_.test_initialization())) {
       TestAll();
@@ -195,11 +1349,12 @@ void Solver<Dtype>::Step(int iters) {
     const bool display = param_.display() && iter_ % param_.display() == 0;
     net_->set_debug_info(display && param_.debug_info());
     // accumulate the loss and gradient
+    tbb::tick_count compute_start = tbb::tick_count::now();
     Dtype loss = 0;
-    for (int i = 0; i < param_.iter_size(); ++i) {
-      loss += net_->ForwardBackward(bottom_vec);
-    }
-    loss /= param_.iter_size();
+    CHECK_EQ(param_.iter_size(), 1);
+    loss = ForwardBackwardUsingPs(bottom_vec, this->net_, /* train */ false);
+    CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
+    compute_time += (tbb::tick_count::now() - compute_start).seconds();
     // average the loss across iterations for smoothed reporting
     if (losses.size() < average_loss) {
       losses.push_back(loss);
@@ -211,7 +1366,8 @@ void Solver<Dtype>::Step(int iters) {
       losses[idx] = loss;
     }
     if (display) {
-      LOG(INFO) << "Iteration " << iter_ << ", loss = " << smoothed_loss;
+      LOG(INFO) << "Iteration " << iter_ << ", loss = " << smoothed_loss
+          << " worker" << ps_config_.worker_id;
       const vector<Blob<Dtype>*>& result = net_->output_blobs();
       int score_index = 0;
       for (int j = 0; j < result.size(); ++j) {
@@ -232,7 +1388,6 @@ void Solver<Dtype>::Step(int iters) {
         }
       }
     }
-    ApplyUpdate();
 
     // Increment the internal iter_ counter -- its value should always indicate
     // the number of times the weights have been updated.
@@ -242,6 +1397,43 @@ void Solver<Dtype>::Step(int iters) {
     if (param_.snapshot() && iter_ % param_.snapshot() == 0) {
       Snapshot();
     }
+
+    if (iter_ % 1000 == 0 || iter_ == stop_iter) {
+      double training_time = (tbb::tick_count::now() - tick_start).seconds();
+      double read_time = 0;
+      double write_time = 0;
+      double compute_time = 0;
+      for (int i = 0; i < layer_infos_.size(); i++) {
+        read_time += layer_infos_[i].fw_read_time;
+        read_time += layer_infos_[i].bw_read_time;
+        write_time += layer_infos_[i].fw_write_time;
+        write_time += layer_infos_[i].bw_write_time;
+        compute_time += layer_infos_[i].fw_compute_time;
+        compute_time += layer_infos_[i].bw_compute_time;
+      }
+      LOG(INFO) << "Read PS time: " << read_time;
+      LOG(INFO) << "Write PS time: " << write_time;
+      LOG(INFO) << "Compute time: " << compute_time;
+      // LOG(INFO) << "Compute time: " << training_time - read_time;
+      LOG(INFO) << "Training time: " << training_time;
+      // LOG(INFO) << "Per layer forwardbackward times:";
+      // for (int i = 0; i < layer_infos_.size(); i++) {
+        // cerr << i << "," << layer_infos_[i].fw_read_time
+             // << "," << layer_infos_[i].fw_compute_time
+             // << "," << layer_infos_[i].fw_write_time
+             // << endl;
+      // }
+      // for (int i = layer_infos_.size() - 1; i >= 0; i--) {
+        // cerr << i << "," << layer_infos_[i].bw_read_time
+             // << "," << layer_infos_[i].bw_compute_time
+             // << "," << layer_infos_[i].bw_write_time
+             // << endl;
+      // }
+    }
+  }
+  if (!ps_config_.no_ps) {
+    string json_stats = ps_->json_stats();
+    cerr << json_stats << endl;
   }
 }
 
@@ -270,20 +1462,21 @@ void Solver<Dtype>::Solve(const char* resume_file) {
   // training, for the train net we only run a forward pass as we've already
   // updated the parameters "max_iter" times -- this final pass is only done to
   // display the loss, which is computed in the forward pass.
-  if (param_.display() && iter_ % param_.display() == 0) {
-    Dtype loss;
-    net_->ForwardPrefilled(&loss);
-    LOG(INFO) << "Iteration " << iter_ << ", loss = " << loss;
-  }
-  if (param_.test_interval() && iter_ % param_.test_interval() == 0) {
-    TestAll();
-  }
+  // if (param_.display() && iter_ % param_.display() == 0) {
+    // Dtype loss;
+    // net_->ForwardPrefilled(&loss);
+    // LOG(INFO) << "Iteration " << iter_ << ", loss = " << loss;
+  // }
+  // if (param_.test_interval() && iter_ % param_.test_interval() == 0) {
+    // TestAll();
+  // }
   LOG(INFO) << "Optimization Done.";
 }
 
 
 template <typename Dtype>
 void Solver<Dtype>::TestAll() {
+  LOG(INFO) << "test_nets_.size() = " << test_nets_.size();
   for (int test_net_id = 0; test_net_id < test_nets_.size(); ++test_net_id) {
     Test(test_net_id);
   }
@@ -301,9 +1494,9 @@ void Solver<Dtype>::Test(const int test_net_id) {
   const shared_ptr<Net<Dtype> >& test_net = test_nets_[test_net_id];
   Dtype loss = 0;
   for (int i = 0; i < param_.test_iter(test_net_id); ++i) {
-    Dtype iter_loss;
-    const vector<Blob<Dtype>*>& result =
-        test_net->Forward(bottom_vec, &iter_loss);
+    Dtype iter_loss =
+        ForwardBackwardUsingPs(bottom_vec, test_net, /* test */ true);
+    const vector<Blob<Dtype>*>& result = test_net->net_output_blobs_;
     if (param_.test_compute_loss()) {
       loss += iter_loss;
     }
@@ -350,6 +1543,7 @@ template <typename Dtype>
 void Solver<Dtype>::Snapshot() {
   NetParameter net_param;
   // For intermediate results, we will also dump the gradient values.
+  CHECK(!param_.snapshot_diff());   // Cui's check
   net_->ToProto(&net_param, param_.snapshot_diff());
   string filename(param_.snapshot_prefix());
   string model_filename, snapshot_filename;
@@ -448,6 +1642,7 @@ void SGDSolver<Dtype>::PreSolve() {
   temp_.clear();
   for (int i = 0; i < net_params.size(); ++i) {
     const vector<int>& shape = net_params[i]->shape();
+    /* Cui: TODO: do we really need these? */
     history_.push_back(shared_ptr<Blob<Dtype> >(new Blob<Dtype>(shape)));
     update_.push_back(shared_ptr<Blob<Dtype> >(new Blob<Dtype>(shape)));
     temp_.push_back(shared_ptr<Blob<Dtype> >(new Blob<Dtype>(shape)));
@@ -482,6 +1677,11 @@ void SGDSolver<Dtype>::ClipGradients() {
 template <typename Dtype>
 void SGDSolver<Dtype>::ApplyUpdate() {
   Dtype rate = GetLearningRate();
+  // if (!this->ps_config_.no_ps) {
+    // /* Cui: now we have more workers */
+    // rate /= this->ps_config_.num_workers;
+  // }
+
   if (this->param_.display() && this->iter_ % this->param_.display() == 0) {
     LOG(INFO) << "Iteration " << this->iter_ << ", lr = " << rate;
   }
@@ -491,7 +1691,9 @@ void SGDSolver<Dtype>::ApplyUpdate() {
     Regularize(param_id);
     ComputeUpdateValue(param_id, rate);
   }
-  this->net_->Update();
+  if (this->ps_config_.no_ps) {
+    this->net_->Update();
+  }
 }
 
 template <typename Dtype>
@@ -561,6 +1763,7 @@ void SGDSolver<Dtype>::Regularize(int param_id) {
             net_params[param_id]->gpu_data(),
             net_params[param_id]->mutable_gpu_diff());
       } else if (regularization_type == "L1") {
+        CHECK(0);
         caffe_gpu_sign(net_params[param_id]->count(),
             net_params[param_id]->gpu_data(),
             temp_[param_id]->mutable_gpu_data());
@@ -587,7 +1790,10 @@ void SGDSolver<Dtype>::ComputeUpdateValue(int param_id, Dtype rate) {
   const vector<shared_ptr<Blob<Dtype> > >& net_params = this->net_->params();
   const vector<float>& net_params_lr = this->net_->params_lr();
   Dtype momentum = this->param_.momentum();
-  Dtype local_rate = rate * net_params_lr[param_id];
+  // Cui: I made the local learning rate negative, so that the updates will be
+  // added to the parameter data instead of subtracted
+  // Dtype local_rate = rate * net_params_lr[param_id];
+  Dtype local_rate = -rate * net_params_lr[param_id];
   // Compute the update to history, then copy it to the parameter diff.
   switch (Caffe::mode()) {
   case Caffe::CPU: {

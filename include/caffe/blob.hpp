@@ -217,8 +217,11 @@ class Blob {
     return diff_;
   }
 
-  const Dtype* cpu_data() const;
   void set_cpu_data(Dtype* data);
+  void set_gpu_data(Dtype* data, bool change_head);
+  void set_cpu_diff(Dtype* diff);
+  void set_gpu_diff(Dtype* diff, bool change_head);
+  const Dtype* cpu_data() const;
   const Dtype* gpu_data() const;
   const Dtype* cpu_diff() const;
   const Dtype* gpu_diff() const;
@@ -226,6 +229,10 @@ class Blob {
   Dtype* mutable_gpu_data();
   Dtype* mutable_cpu_diff();
   Dtype* mutable_gpu_diff();
+  const Dtype* check_cpu_data() const;
+  const Dtype* check_gpu_data() const;
+  const Dtype* check_cpu_diff() const;
+  const Dtype* check_gpu_diff() const;
   void Update();
   void FromProto(const BlobProto& proto, bool reshape = true);
   void ToProto(BlobProto* proto, bool write_diff = false) const;

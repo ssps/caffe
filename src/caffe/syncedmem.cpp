@@ -12,7 +12,7 @@ SyncedMemory::~SyncedMemory() {
   }
 
 #ifndef CPU_ONLY
-  if (gpu_ptr_) {
+  if (gpu_ptr_ && own_gpu_data_) {
     CUDA_CHECK(cudaFree(gpu_ptr_));
   }
 #endif  // CPU_ONLY
@@ -21,10 +21,12 @@ SyncedMemory::~SyncedMemory() {
 inline void SyncedMemory::to_cpu() {
   switch (head_) {
   case UNINITIALIZED:
-    CaffeMallocHost(&cpu_ptr_, size_);
-    caffe_memset(size_, 0, cpu_ptr_);
+    if (cpu_ptr_ == NULL) {
+      CaffeMallocHost(&cpu_ptr_, size_);
+      caffe_memset(size_, 0, cpu_ptr_);
+      own_cpu_data_ = true;
+    }
     head_ = HEAD_AT_CPU;
-    own_cpu_data_ = true;
     break;
   case HEAD_AT_GPU:
 #ifndef CPU_ONLY
@@ -48,13 +50,19 @@ inline void SyncedMemory::to_gpu() {
 #ifndef CPU_ONLY
   switch (head_) {
   case UNINITIALIZED:
-    CUDA_CHECK(cudaMalloc(&gpu_ptr_, size_));
-    caffe_gpu_memset(size_, 0, gpu_ptr_);
+    if (gpu_ptr_ == NULL) {
+      LOG(INFO) << "Allocate GPU data for " << this << " with size " << size_;
+      CUDA_CHECK(cudaMalloc(&gpu_ptr_, size_));
+      caffe_gpu_memset(size_, 0, gpu_ptr_);
+      own_gpu_data_ = true;
+    }
     head_ = HEAD_AT_GPU;
     break;
   case HEAD_AT_CPU:
     if (gpu_ptr_ == NULL) {
+      LOG(INFO) << "Allocate GPU data for " << this << " with size " << size_;
       CUDA_CHECK(cudaMalloc(&gpu_ptr_, size_));
+      own_gpu_data_ = true;
     }
     caffe_gpu_memcpy(size_, cpu_ptr_, gpu_ptr_);
     head_ = SYNCED;
@@ -68,19 +76,67 @@ inline void SyncedMemory::to_gpu() {
 #endif
 }
 
-const void* SyncedMemory::cpu_data() {
-  to_cpu();
-  return (const void*)cpu_ptr_;
-}
-
 void SyncedMemory::set_cpu_data(void* data) {
-  CHECK(data);
   if (own_cpu_data_) {
     CaffeFreeHost(cpu_ptr_);
   }
   cpu_ptr_ = data;
-  head_ = HEAD_AT_CPU;
   own_cpu_data_ = false;
+  if (data != NULL) {
+    head_ = HEAD_AT_CPU;
+  } else {
+    head_ = UNINITIALIZED;
+  }
+}
+
+void SyncedMemory::set_gpu_data(void* data, bool change_head) {
+  // LOG(INFO) << "set_gpu_data for " << this;
+  // LOG(INFO) << "data = " << data;
+  // LOG(INFO) << "change_head = " << change_head;
+  // LOG(INFO) << "own_gpu_data_ = " << own_gpu_data_;
+  // LOG(INFO) << "gpu_ptr_ = " << gpu_ptr_;
+  // LOG(INFO) << "own_cpu_data_ = " << own_cpu_data_;
+  // LOG(INFO) << "cpu_ptr_ = " << cpu_ptr_;
+  // LOG(INFO) << "own_cpu_data_ = " << own_cpu_data_;
+  // LOG(INFO) << "head_ = " << head_;
+  if (data != NULL) {
+    CHECK(!own_gpu_data_) << "own_gpu_data for " << this;
+    CHECK(!gpu_ptr_);
+  }
+  if (data == NULL) {
+    CHECK(!own_gpu_data_) << "own_gpu_data for " << this;
+    CHECK(gpu_ptr_);
+  }
+  if (own_gpu_data_ && gpu_ptr_) {
+    /* Should not happen */
+    CHECK(0);
+    CUDA_CHECK(cudaFree(gpu_ptr_));
+  }
+  gpu_ptr_ = data;
+  own_gpu_data_ = false;
+  if (change_head) {
+    // CHECK_NE(head_, HEAD_AT_CPU);
+    if (head_ == HEAD_AT_CPU) {
+      LOG(INFO) << "WARNING: HEAD_AT_CPU!!!";
+    }
+    if (data != NULL) {
+      head_ = HEAD_AT_GPU;
+    } else {
+      head_ = UNINITIALIZED;
+    }
+  } else {
+    if (head_ == SYNCED) {
+      head_ = HEAD_AT_CPU;
+    }
+    if (head_ == HEAD_AT_GPU) {
+      head_ = UNINITIALIZED;
+    }
+  }
+}
+
+const void* SyncedMemory::cpu_data() {
+  to_cpu();
+  return (const void*)cpu_ptr_;
 }
 
 const void* SyncedMemory::gpu_data() {
@@ -108,6 +164,13 @@ void* SyncedMemory::mutable_gpu_data() {
 #endif
 }
 
+const void* SyncedMemory::check_cpu_data() const {
+  return (const void*)cpu_ptr_;
+}
+
+const void* SyncedMemory::check_gpu_data() const {
+  return (const void*)gpu_ptr_;
+}
 
 }  // namespace caffe
 

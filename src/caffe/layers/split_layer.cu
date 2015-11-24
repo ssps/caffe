@@ -10,7 +10,9 @@ template <typename Dtype>
 void SplitLayer<Dtype>::Forward_gpu(const vector<Blob<Dtype>*>& bottom,
       const vector<Blob<Dtype>*>& top) {
   for (int i = 0; i < top.size(); ++i) {
-    top[i]->ShareData(*bottom[0]);
+    /* Cui: copy instead of share, because the bottom data could be released */
+    caffe_copy(count_, bottom[0]->gpu_data(), top[i]->mutable_gpu_data());
+    // top[i]->ShareData(*bottom[0]);
   }
 }
 

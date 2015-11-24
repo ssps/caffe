@@ -14,6 +14,9 @@ __global__ void sync_conv_groups() { }
 template <typename Dtype>
 void CuDNNConvolutionLayer<Dtype>::Forward_gpu(
     const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top) {
+  /* Cui: synchronize with our current stream before using the new streams */
+  CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
+
   for (int i = 0; i < bottom.size(); ++i) {
     const Dtype* bottom_data = bottom[i]->gpu_data();
     Dtype* top_data = top[i]->mutable_gpu_data();
@@ -89,17 +92,67 @@ void CuDNNConvolutionLayer<Dtype>::Forward_gpu(
     // Synchronize the work across groups, each of which went into its own
     // stream, by launching an empty kernel into the default (null) stream.
     // NOLINT_NEXT_LINE(whitespace/operators)
-    sync_conv_groups<<<1, 1>>>();
+    // sync_conv_groups<<<1, 1>>>();
+
+    /* Cui: synchronize the cuDNN streams */
+    for (int g = 0; g < this->group_; g++) {
+      CUDA_CHECK(cudaStreamSynchronize(stream_[g]));
+    }
   }
 }
 
 template <typename Dtype>
 void CuDNNConvolutionLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top,
     const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom) {
+  /* Cui: synchronize with our current stream before using these new streams */
+  CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
+
   const Dtype* weight = NULL;
-  Dtype* weight_diff = NULL;
   if (this->param_propagate_down_[0]) {
     weight = this->blobs_[0]->gpu_data();
+  }
+  for (int i = 0; i < top.size(); ++i) {
+    const Dtype* top_diff = top[i]->gpu_diff();
+    // Backward through cuDNN in parallel over groups and gradients.
+    for (int g = 0; g < this->group_; g++) {
+      // Gradient w.r.t. bottom data.
+      if (propagate_down[i]) {
+        if (weight == NULL) {
+          weight = this->blobs_[0]->gpu_data();
+        }
+        Dtype* bottom_diff = bottom[i]->mutable_gpu_diff();
+        CUDNN_CHECK(cudnnConvolutionBackwardData(handle_[2*this->group_ + g],
+              cudnn::dataType<Dtype>::one,
+              filter_desc_, weight + weight_offset_ * g,
+              top_descs_[i], top_diff + top_offset_ * g,
+              conv_descs_[i],
+              cudnn::dataType<Dtype>::zero,
+              bottom_descs_[i], bottom_diff + bottom_offset_ * g));
+      }
+    }
+
+    // Synchronize the work across groups, each of which went into its own
+    // stream, by launching an empty kernel into the default (null) stream.
+    // NOLINT_NEXT_LINE(whitespace/operators)
+    // sync_conv_groups<<<1, 1>>>();
+
+    /* Cui: synchronize the cuDNN streams */
+    for (int g = this->group_;
+         g < this->group_ * 3; g++) {
+      CUDA_CHECK(cudaStreamSynchronize(stream_[g]));
+    }
+  }
+}
+
+template <typename Dtype>
+void CuDNNConvolutionLayer<Dtype>::ComputeDiff(
+    const vector<Blob<Dtype>*>& top,
+    const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom) {
+  /* Cui: synchronize with our current stream before using these new streams */
+  CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
+
+  Dtype* weight_diff = NULL;
+  if (this->param_propagate_down_[0]) {
     weight_diff = this->blobs_[0]->mutable_gpu_diff();
   }
   Dtype* bias_diff = NULL;
@@ -130,29 +183,29 @@ void CuDNNConvolutionLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top,
               cudnn::dataType<Dtype>::one,
               filter_desc_, weight_diff + weight_offset_ * g));
       }
-
-      // Gradient w.r.t. bottom data.
-      if (propagate_down[i]) {
-        if (weight == NULL) {
-          weight = this->blobs_[0]->gpu_data();
-        }
-        Dtype* bottom_diff = bottom[i]->mutable_gpu_diff();
-        CUDNN_CHECK(cudnnConvolutionBackwardData(handle_[2*this->group_ + g],
-              cudnn::dataType<Dtype>::one,
-              filter_desc_, weight + weight_offset_ * g,
-              top_descs_[i], top_diff + top_offset_ * g,
-              conv_descs_[i],
-              cudnn::dataType<Dtype>::zero,
-              bottom_descs_[i], bottom_diff + bottom_offset_ * g));
-      }
     }
 
     // Synchronize the work across groups, each of which went into its own
     // stream, by launching an empty kernel into the default (null) stream.
     // NOLINT_NEXT_LINE(whitespace/operators)
-    sync_conv_groups<<<1, 1>>>();
+    // sync_conv_groups<<<1, 1>>>();
+
+    /* Cui: synchronize the cuDNN streams */
+    for (int g = this->group_;
+         g < this->group_ * 3; g++) {
+      CUDA_CHECK(cudaStreamSynchronize(stream_[g]));
+    }
   }
 }
+/* Instantiate function */
+template void CuDNNConvolutionLayer<float>::ComputeDiff(
+      const std::vector<Blob<float>*>& top,
+      const std::vector<bool>& propagate_down,
+      const std::vector<Blob<float>*>& bottom);
+template void CuDNNConvolutionLayer<double>::ComputeDiff(
+      const std::vector<Blob<double>*>& top,
+      const std::vector<bool>& propagate_down,
+      const std::vector<Blob<double>*>& bottom);
 
 INSTANTIATE_LAYER_GPU_FUNCS(CuDNNConvolutionLayer);
 

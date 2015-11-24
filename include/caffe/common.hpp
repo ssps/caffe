@@ -128,6 +128,7 @@ class Caffe {
     return *(Get().random_generator_);
   }
 #ifndef CPU_ONLY
+  inline static cudaStream_t cuda_stream() { return Get().cuda_stream_; }
   inline static cublasHandle_t cublas_handle() { return Get().cublas_handle_; }
   inline static curandGenerator_t curand_generator() {
     return Get().curand_generator_;
@@ -152,6 +153,7 @@ class Caffe {
 
  protected:
 #ifndef CPU_ONLY
+  cudaStream_t cuda_stream_;
   cublasHandle_t cublas_handle_;
   curandGenerator_t curand_generator_;
 #endif

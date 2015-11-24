@@ -28,6 +28,19 @@ template <typename Dtype>
 void InnerProductLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top,
     const vector<bool>& propagate_down,
     const vector<Blob<Dtype>*>& bottom) {
+  if (propagate_down[0]) {
+    const Dtype* top_diff = top[0]->gpu_diff();
+    // Gradient with respect to bottom data
+    caffe_gpu_gemm<Dtype>(CblasNoTrans, CblasNoTrans, M_, K_, N_, (Dtype)1.,
+        top_diff, this->blobs_[0]->gpu_data(), (Dtype)0.,
+        bottom[0]->mutable_gpu_diff());
+  }
+}
+
+template <typename Dtype>
+void InnerProductLayer<Dtype>::ComputeDiff(const vector<Blob<Dtype>*>& top,
+    const vector<bool>& propagate_down,
+    const vector<Blob<Dtype>*>& bottom) {
   if (this->param_propagate_down_[0]) {
     const Dtype* top_diff = top[0]->gpu_diff();
     const Dtype* bottom_data = bottom[0]->gpu_data();
@@ -42,14 +55,16 @@ void InnerProductLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top,
         bias_multiplier_.gpu_data(), (Dtype)1.,
         this->blobs_[1]->mutable_gpu_diff());
   }
-  if (propagate_down[0]) {
-    const Dtype* top_diff = top[0]->gpu_diff();
-    // Gradient with respect to bottom data
-    caffe_gpu_gemm<Dtype>(CblasNoTrans, CblasNoTrans, M_, K_, N_, (Dtype)1.,
-        top_diff, this->blobs_[0]->gpu_data(), (Dtype)0.,
-        bottom[0]->mutable_gpu_diff());
-  }
 }
+/* Instantiate function */
+template void InnerProductLayer<float>::ComputeDiff(
+      const std::vector<Blob<float>*>& top,
+      const std::vector<bool>& propagate_down,
+      const std::vector<Blob<float>*>& bottom);
+template void InnerProductLayer<double>::ComputeDiff(
+      const std::vector<Blob<double>*>& top,
+      const std::vector<bool>& propagate_down,
+      const std::vector<Blob<double>*>& bottom);
 
 INSTANTIATE_LAYER_GPU_FUNCS(InnerProductLayer);
 

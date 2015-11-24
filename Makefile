@@ -344,6 +344,17 @@ LIBRARY_DIRS += $(BLAS_LIB)
 
 LIBRARY_DIRS += $(LIB_BUILD_DIR)
 
+# Adding LazyTable library
+LIBRARIES += lazytablemodule_shared
+# LIBRARIES += lazytablemodule
+LIBRARY_DIRS += ../../flat-map
+INCLUDE_DIRS += ../../lazy-table-module/include
+# TODO: shall not use absolute path here
+# LIBRARY_DIRS += /tank/projects/biglearning/hengganc/install-ubuntu14/cudnn-6.5-linux-x64-v2
+# INCLUDE_DIRS += /tank/projects/biglearning/hengganc/install-ubuntu14/cudnn-6.5-linux-x64-v2
+LDFLAGS += -Wl,-rpath,/tank/projects/biglearning/hengganc/LazyTable/flat-map
+LDFLAGS += -Wl,-rpath,/tank/projects/biglearning/hengganc/cudnn-6.5-linux-x64-v2
+
 # Automatic dependency generation (nvcc is handled separately)
 CXXFLAGS += -MMD -MP
 
@@ -364,6 +375,11 @@ endif
 LDFLAGS += $(foreach librarydir,$(LIBRARY_DIRS),-L$(librarydir)) $(PKG_CONFIG) \
 		$(foreach library,$(LIBRARIES),-l$(library))
 PYTHON_LDFLAGS := $(LDFLAGS) $(foreach library,$(PYTHON_LIBRARIES),-l$(library))
+
+$(info $$LINKFLAGS is [${LINKFLAGS}])
+$(info $$PROJECT is [${PROJECT}])
+$(info $$LDFLAGS is [${LDFLAGS}])
+$(info $$ORIGIN is [${ORIGIN}])
 
 # 'superclean' target recursively* deletes all files ending with an extension
 # in $(SUPERCLEAN_EXTS) below.  This may be useful if you've built older
