@@ -25,7 +25,7 @@ using std::endl;
 using boost::make_shared;
 
 #define MULTI_TABLE
-// #define LOCAL_DATA_IN_PS
+#define LOCAL_DATA_IN_PS
 
 namespace caffe {
 
@@ -231,6 +231,8 @@ void Solver<float>::InitPs() {
   vector<shared_ptr<Layer<float> > >& layers = this->net_->layers_;
   vector<string>& layer_types = this->net_->layer_types_;
   vector<bool>& layer_need_backward = this->net_->layer_need_backward_;
+  vector<vector<bool> >& bottom_need_backward =
+      this->net_->bottom_need_backward_;
   vector<shared_ptr<Blob<float> > >& params = this->net_->params_;
   layer_infos_.resize(layers.size());
   int total_num_params = 0;
@@ -240,15 +242,21 @@ void Solver<float>::InitPs() {
   int global_param_id = 0;
 
   /* Decide row keys for model parameters */
-  // LOG(INFO) << "param sizes:";
   for (int layer_id = 0; layer_id < layers.size(); layer_id++) {
     shared_ptr<Layer<float> >& layer = layers[layer_id];
     LayerInfo& layer_info = layer_infos_[layer_id];
     int num_params = layer->blobs().size();
+    layer_info.layer_need_backward = layer_need_backward[layer_id];
+    layer_info.bottom_need_backward = bottom_need_backward[layer_id];
     if (num_params > 0) {
       layer_info.param_infos.resize(num_params);
-      layer_info.table_id = table_id;
       total_num_params += num_params;
+      if (layer_info.layer_need_backward) {
+        layer_info.local_param = false;
+      } else {
+        /* The parameters of this layer will not be changed */
+        layer_info.local_param = true;
+      }
       layer_info.num_vals = 0;
       for (int param_id = 0; param_id < num_params; param_id++) {
         shared_ptr<Blob<float> >& param = layer->blobs()[param_id];
@@ -258,13 +266,23 @@ void Solver<float>::InitPs() {
       }
       int num_rows = (layer_info.num_vals + ROW_DATA_SIZE - 1) / ROW_DATA_SIZE;
       for (int i = 0; i < num_rows; i++) {
-        layer_info.row_ids.push_back(row_id++);
+        if (!layer_info.local_param) {
+          layer_info.row_ids.push_back(row_id++);
+        } else {
+          layer_info.row_ids.push_back(local_store_row_id++);
+        }
         layer_info.history_data_row_ids.push_back(local_store_row_id++);
       }
+      if (!layer_info.local_param) {
+        layer_info.table_id = table_id;
 #if defined(MULTI_TABLE)
-      table_id++;
-      row_id = 0;
+        table_id++;
+        row_id = 0;
 #endif
+      } else {
+        /* The parameters of this layer will not be changed */
+        layer_info.table_id = 0;
+      }
     }
     layer_info.fw_read_time = 0;
     layer_info.fw_compute_time = 0;
@@ -823,7 +841,7 @@ void Solver<float>::InitPs() {
       ps_config_.worker_id, ps_config_.lt_config);
   ps_->thread_start();
 
-  /* Virtual iteration */ 
+  /* Virtual iteration */
   for (int batch_id = 0; batch_id < ps_config_.batches_per_clock; batch_id++) {
     /* Virtual iteration, forward pass */
     for (int layer_id = 0; layer_id < layer_infos_.size(); layer_id++) {
@@ -859,9 +877,14 @@ void Solver<float>::InitPs() {
 #endif
       /* Read model parameters */
       if (layer_info.param_infos.size()) {
-        layer_handles.read_handle = ps_->virtual_read_batch(
-            layer_info.table_id, layer_info.row_ids,
-            ps_config_.slack, layer_info.num_vals);
+        if (!layer_info.local_param) {
+          layer_handles.read_handle = ps_->virtual_read_batch(
+              layer_info.table_id, layer_info.row_ids,
+              ps_config_.slack, layer_info.num_vals);
+        } else {
+          layer_handles.read_handle = ps_->virtual_localaccess_batch(
+              layer_info.row_ids, layer_info.num_vals, true /* fetch */);
+        }
       }
 #if defined(LOCAL_DATA_IN_PS)
       /* Release intermediate data blobs */
@@ -893,14 +916,20 @@ void Solver<float>::InitPs() {
 #endif
       /* Release model parameters */
       if (layer_info.param_infos.size()) {
-        layer_handles.postread_handle = ps_->virtual_postread_batch(
-            layer_handles.read_handle);
+        if (!layer_info.local_param) {
+          layer_handles.postread_handle = ps_->virtual_postread_batch(
+              layer_handles.read_handle);
+        } else {
+          layer_handles.postread_handle = ps_->virtual_postlocalaccess_batch(
+              layer_handles.read_handle, false /* don't need to write back */);
+        }
       }
     }
     /* Virtual iteration, backward pass */
     for (int layer_id = layer_infos_.size() - 1; layer_id >= 0; layer_id--) {
       if (!layer_need_backward[layer_id]) {
-        /* We assume only the data layer doesn't need backward */
+        /* For a layer that doesn't need backward, we assume all layers
+         * below it don't need backward either. */
         continue;
       }
       LayerInfo& layer_info = layer_infos_[layer_id];
@@ -937,6 +966,7 @@ void Solver<float>::InitPs() {
 #endif
       /* Read and prewrite model parameters */
       if (layer_info.param_infos.size()) {
+        CHECK(!layer_info.local_param);
         layer_handles.prewrite_handle = ps_->virtual_prewrite_batch(
             layer_info.table_id, layer_info.row_ids, layer_info.num_vals);
         layer_handles.bw_read_handle = ps_->virtual_read_batch(
@@ -990,6 +1020,21 @@ void Solver<float>::InitPs() {
     }
   }
   ps_->virtual_clock();
+  /* Report unrepeated accesses.
+   * Currently, we assume all accesses after clock are unrepeated accesses. */
+  for (int layer_id = 0; layer_id < layer_infos_.size(); layer_id++) {
+    LayerInfo& layer_info = layer_infos_[layer_id];
+    if (!layer_info.local_param) {
+      continue;
+    }
+    /* Local parameters are only modified at initialization,
+     * so we register the write accesses as unrepeated ones. */
+    LayerHandles& layer_handles = layer_info.layer_handles[0];
+    layer_handles.prewrite_handle = ps_->virtual_localaccess_batch(
+        layer_info.row_ids, layer_info.num_vals, false /* no fetch */);
+    layer_handles.write_handle = ps_->virtual_postlocalaccess_batch(
+        layer_handles.prewrite_handle, true /* keep */);
+  }
   ps_->finish_virtual_iteration();
   LOG(INFO) << "Virtual iteration done";
   cout << "total_size = " << total_size << endl;
@@ -1012,7 +1057,11 @@ void Solver<float>::SetPsParamValues() {
       if (layer_info.param_infos.size()) {
         /* Pre-write */
         RowOpVal *inc_buffer;
-        ps_->preinc_batch(&inc_buffer, layer_handles.prewrite_handle);
+        if (!layer_info.local_param) {
+          ps_->preinc_batch(&inc_buffer, layer_handles.prewrite_handle);
+        } else {
+          ps_->localaccess_batch(&inc_buffer, layer_handles.prewrite_handle);
+        }
         float *params_vals = reinterpret_cast<float *>(inc_buffer);
         for (int param_id = 0;
             param_id < layer_info.param_infos.size(); param_id++) {
@@ -1037,7 +1086,11 @@ void Solver<float>::SetPsParamValues() {
           param->set_gpu_data(NULL, true);
           /* "true" means that we don't keep CPU data */
         }
-        ps_->inc_batch(layer_handles.write_handle);
+        if (!layer_info.local_param) {
+          ps_->inc_batch(layer_handles.write_handle);
+        } else {
+          ps_->postlocalaccess_batch(layer_handles.write_handle);
+        }
       }
     }
   }
@@ -1054,10 +1107,11 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
   vector<shared_ptr<Layer<float> > >& layers = net->layers_;
   vector<vector<Blob<float>*> >& bottom_vecs = net->bottom_vecs_;
   vector<vector<Blob<float>*> >& top_vecs = net->top_vecs_;
-  vector<bool>& layer_need_backward = net->layer_need_backward_;
-  vector<vector<bool> >& bottom_need_backward = net->bottom_need_backward_;
   vector<shared_ptr<Blob<float> > >& imbs = net->blobs_;
   vector<string>& layer_names = net->layer_names_;
+  /* When we test on the testing network, we will use the layer information
+   * that is gathered using training network, so we are assuming
+   * the testing network has the same topology as the training network. */
   tbb::tick_count tick_start;
 
   // if (test) {
@@ -1115,14 +1169,19 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
 #endif
       /* Read model parameters */
       if (layer_info.param_infos.size()) {
-        // LOG(INFO) << "Read params";
+        // LOG(INFO) << "Read params: handle #" << layer_handles.read_handle;
         RowOpVal *read_buffer;
-        ps_->read_batch(&read_buffer, layer_handles.read_handle);
+        if (!layer_info.local_param) {
+          ps_->read_batch(&read_buffer, layer_handles.read_handle);
+        } else {
+          ps_->localaccess_batch(&read_buffer, layer_handles.read_handle);
+        }
         float *params_vals = reinterpret_cast<float *>(read_buffer);
         for (int param_id = 0;
             param_id < layer_info.param_infos.size(); param_id++) {
           int param_val_offset = layer_info.param_infos[param_id].val_offset;
           float *param_vals = &params_vals[param_val_offset];
+          CHECK_LT(param_id, layer->blobs().size());
           shared_ptr<Blob<float> >& param = layer->blobs()[param_id];
           CHECK(!param->check_gpu_data())
               << "layer " << layer_names[layer_id] << " has gpu param";
@@ -1131,7 +1190,8 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
       }
       CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
       if (!test) {
-        layer_info.fw_read_time += (tbb::tick_count::now() - tick_start).seconds();
+        layer_info.fw_read_time +=
+            (tbb::tick_count::now() - tick_start).seconds();
       }
 
       /* Forward calculation */
@@ -1143,7 +1203,8 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
       // LOG(INFO) << "layer_loss = " << layer_loss;
       loss += layer_loss;
       if (!test) {
-        layer_info.fw_compute_time += (tbb::tick_count::now() - tick_start).seconds();
+        layer_info.fw_compute_time +=
+            (tbb::tick_count::now() - tick_start).seconds();
       }
 
       tick_start = tbb::tick_count::now();
@@ -1177,17 +1238,23 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
 #endif
       /* Release read buffers */
       if (layer_info.param_infos.size()) {
-        // LOG(INFO) << "Release read buffers";
+        // LOG(INFO) << "Release read buffers: handle #"
+            // << layer_handles.postread_handle;
         for (int param_id = 0;
             param_id < layer_info.param_infos.size(); param_id++) {
           shared_ptr<Blob<float> >& param = layer->blobs()[param_id];
           param->set_gpu_data(NULL, true);
         }
-        ps_->postread_batch(layer_handles.postread_handle);
+        if (!layer_info.local_param) {
+          ps_->postread_batch(layer_handles.postread_handle);
+        } else {
+          ps_->postlocalaccess_batch(layer_handles.postread_handle);
+        }
       }
       CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
       if (!test) {
-        layer_info.fw_write_time += (tbb::tick_count::now() - tick_start).seconds();
+        layer_info.fw_write_time +=
+            (tbb::tick_count::now() - tick_start).seconds();
       }
     }
 
@@ -1195,14 +1262,13 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
     // LOG(INFO) << "Backward";
     for (int layer_id = layer_infos_.size() - 1; layer_id >= 0; layer_id--) {
       // LOG(INFO) << "Layer " << layer_id << ": " << layer_names[layer_id];
-      CHECK_LT(layer_id, layer_need_backward.size());
-      if (!test && !layer_need_backward[layer_id]) {
-        continue;
-      }
       CHECK_LT(layer_id, layers.size());
       shared_ptr<Layer<float> >& layer = layers[layer_id];
       CHECK(layer);
       LayerInfo& layer_info = layer_infos_[layer_id];
+      if (!layer_info.layer_need_backward) {
+        continue;
+      }
       LayerHandles& layer_handles = layer_info.layer_handles[batch_id];
 
       tick_start = tbb::tick_count::now();
@@ -1237,6 +1303,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
       if (layer_info.param_infos.size()) {
         /* Prepare write buffers */
         // LOG(INFO) << "Prepare write buffers";
+        CHECK(!layer_info.local_param);
         RowOpVal *write_buffer;
         ps_->preinc_batch(&write_buffer, layer_handles.prewrite_handle);
         float *write_params_vals = reinterpret_cast<float *>(write_buffer);
@@ -1266,34 +1333,38 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
         }
         /* Access local updates history */
         RowOpVal *history_buffer;
-        ps_->localaccess_batch(&history_buffer, layer_handles.history_access_handle);
+        ps_->localaccess_batch(
+            &history_buffer, layer_handles.history_access_handle);
         float *history_vals = reinterpret_cast<float *>(history_buffer);
         for (int param_id = 0;
             param_id < layer_info.param_infos.size(); param_id++) {
           int param_val_offset = layer_info.param_infos[param_id].val_offset;
           float *history_param_vals = &history_vals[param_val_offset];
-          int global_param_id = layer_info.param_infos[param_id].global_param_id;
+          int global_param_id =
+              layer_info.param_infos[param_id].global_param_id;
           history_[global_param_id]->set_gpu_data(history_param_vals, true);
         }
       }
       CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
       if (!test) {
-        layer_info.bw_read_time += (tbb::tick_count::now() - tick_start).seconds();
+        layer_info.bw_read_time +=
+            (tbb::tick_count::now() - tick_start).seconds();
       }
 
       if (!test) {
         /* Backward calculation */
         // LOG(INFO) << "Backward calculation";
         tick_start = tbb::tick_count::now();
-        layer->Backward(top_vecs[layer_id], bottom_need_backward[layer_id],
+        layer->Backward(top_vecs[layer_id], layer_info.bottom_need_backward,
             bottom_vecs[layer_id]);
         CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
         /* Compute diff */
         // LOG(INFO) << "Compute diff";
-        layer->ComputeDiff(top_vecs[layer_id], bottom_need_backward[layer_id],
+        layer->ComputeDiff(top_vecs[layer_id], layer_info.bottom_need_backward,
             bottom_vecs[layer_id]);
         CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
-        layer_info.bw_compute_time += (tbb::tick_count::now() - tick_start).seconds();
+        layer_info.bw_compute_time +=
+            (tbb::tick_count::now() - tick_start).seconds();
       }
 
       tick_start = tbb::tick_count::now();
@@ -1327,7 +1398,8 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
 #endif
       CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
       if (!test) {
-        layer_info.bw_write_time += (tbb::tick_count::now() - tick_start).seconds();
+        layer_info.bw_write_time +=
+            (tbb::tick_count::now() - tick_start).seconds();
       }
 
       if (layer_info.param_infos.size()) {
@@ -1335,7 +1407,8 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
         tick_start = tbb::tick_count::now();
         for (int param_id = 0;
             param_id < layer_info.param_infos.size(); param_id++) {
-          int global_param_id = layer_info.param_infos[param_id].global_param_id;
+          int global_param_id =
+              layer_info.param_infos[param_id].global_param_id;
           if (!test) {
             /* Adjust gradient */
             float rate = GetLearningRate();
@@ -1351,7 +1424,8 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
           param->set_gpu_diff(NULL, true);
         }
         if (!test) {
-          layer_info.bw_compute_time += (tbb::tick_count::now() - tick_start).seconds();
+          layer_info.bw_compute_time +=
+              (tbb::tick_count::now() - tick_start).seconds();
         }
 
         tick_start = tbb::tick_count::now();
@@ -1368,7 +1442,8 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
         /* Release local updates history */
         for (int param_id = 0;
             param_id < layer_info.param_infos.size(); param_id++) {
-          int global_param_id = layer_info.param_infos[param_id].global_param_id;
+          int global_param_id =
+              layer_info.param_infos[param_id].global_param_id;
           history_[global_param_id]->gpu_data();
             /* Make sure everything is copied to GPU memory */
           history_[global_param_id]->set_gpu_data(NULL, true);
@@ -1376,7 +1451,8 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
         ps_->postlocalaccess_batch(layer_handles.history_postaccess_handle);
         CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
         if (!test) {
-          layer_info.bw_write_time += (tbb::tick_count::now() - tick_start).seconds();
+          layer_info.bw_write_time +=
+              (tbb::tick_count::now() - tick_start).seconds();
         }
       }
     }

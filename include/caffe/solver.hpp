@@ -68,6 +68,9 @@ struct LayerHandles {
 
 typedef std::map<int, FetchKeep> IntSet;
 struct LayerInfo {
+  bool layer_need_backward;
+  vector<bool> bottom_need_backward;
+  bool local_param;
   int table_id;
   vector<uint> row_ids;
   vector<uint> history_data_row_ids;
