@@ -109,6 +109,10 @@ class Transformer:
         self.raw_scale = {}
         self.mean = {}
         self.input_scale = {}
+<<<<<<< HEAD
+=======
+        self.is_flow = {}
+>>>>>>> 76fdb57db97dba5b551df90ce965b48fcb9a7abc
 
     def __check_input(self, in_):
         if in_ not in self.inputs:
@@ -269,6 +273,16 @@ class Transformer:
         self.__check_input(in_)
         self.input_scale[in_] = scale
 
+    def set_is_flow(self, in_, is_flow):
+        """
+	Indicate if input is a flow image
+
+        Take
+        in_: which input to assign this scale factor
+        is_flow: boolean indicating if the input is a flow image
+        """
+        self.__check_input(in_)
+        self.is_flow[in_] = is_flow
 
 ## Image IO
 
@@ -298,6 +312,22 @@ def load_image(filename, color=True):
         img = img[:, :, :3]
     return img
 
+def flip_image(im, scale=128, is_flow=False):
+    """
+    Flip image.
+
+    Take
+    im: (H x W x K) ndarray
+    scale: scale needed for flipping
+    is_flow: indicates if image is flow image
+
+    Give
+    im: flipped image with shape (HxWxK)
+    """
+    im = im[:, ::-1, :]  # flip for mirrors
+    if is_flow:  #if using a flow input, should flip first channel which corresponds to x-flow
+      im[:,:,0] = scale-im[:,:,0]
+    return im
 
 def resize_image(im, new_dims, interp_order=1):
     """
@@ -319,7 +349,7 @@ def resize_image(im, new_dims, interp_order=1):
             # skimage is fast but only understands {1,3} channel images
             # in [0, 1].
             im_std = (im - im_min) / (im_max - im_min)
-            resized_std = resize(im_std, new_dims, order=interp_order)
+            resized_std = resize(im_std, new_dims, order=interp_order, mode='nearest')
             resized_im = resized_std * (im_max - im_min) + im_min
         else:
             # the image is a constant -- avoid divide by 0
@@ -334,7 +364,7 @@ def resize_image(im, new_dims, interp_order=1):
     return resized_im.astype(np.float32)
 
 
-def oversample(images, crop_dims):
+def oversample(images, crop_dims, flow=False):
     """
     Crop images into the four corners, center, and their mirrored versions.
 
@@ -376,4 +406,6 @@ def oversample(images, crop_dims):
             crops[ix] = im[crop[0]:crop[2], crop[1]:crop[3], :]
             ix += 1
         crops[ix-5:ix] = crops[ix-5:ix, :, ::-1, :]  # flip for mirrors
+        if flow:  #if using a flow input, should flip first channel which corresponds to x-flow
+          crops[ix-5:ix,:,:,0] = 1-crops[ix-5:ix,:,:,0]
     return crops

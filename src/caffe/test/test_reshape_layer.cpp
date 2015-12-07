@@ -7,6 +7,7 @@
 #include "caffe/common.hpp"
 #include "caffe/common_layers.hpp"
 #include "caffe/filler.hpp"
+#include "caffe/vision_layers.hpp"
 
 #include "caffe/test/test_caffe_main.hpp"
 #include "caffe/test/test_gradient_check_util.hpp"
@@ -27,7 +28,6 @@ class ReshapeLayerTest : public MultiDeviceTest<TypeParam> {
     blob_bottom_vec_.push_back(blob_bottom_);
     blob_top_vec_.push_back(blob_top_);
   }
-
   virtual ~ReshapeLayerTest() { delete blob_bottom_; delete blob_top_; }
 
   Blob<Dtype>* const blob_bottom_;
