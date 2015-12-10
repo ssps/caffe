@@ -460,7 +460,7 @@ void Net<Dtype>::AppendParam(const NetParameter& param, const int layer_id,
   } else {
     // Named param blob with name we've seen before: share params
     /* Cui: I do not support this */
-    CHECK(0);
+    // CHECK(0);
     const int owner_net_param_id = param_names_index_[param_name];
     param_owners_.push_back(owner_net_param_id);
     const pair<int, int>& owner_index =

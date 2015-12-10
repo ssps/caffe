@@ -109,10 +109,7 @@ class Transformer:
         self.raw_scale = {}
         self.mean = {}
         self.input_scale = {}
-<<<<<<< HEAD
-=======
         self.is_flow = {}
->>>>>>> 76fdb57db97dba5b551df90ce965b48fcb9a7abc
 
     def __check_input(self, in_):
         if in_ not in self.inputs:

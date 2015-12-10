@@ -24,9 +24,10 @@ import copy
 flow_frames = 'flow_images/'
 RGB_frames = 'frames/'
 test_frames = 16 
-train_frames = 16
+train_frames = 16   # Number of frames per video
 test_buffer = 3
-train_buffer = 24
+# train_buffer = 24
+train_buffer = 12   # Number of videos
 
 def processImageCrop(im_info, transformer, flow):
   im_path = im_info[0]
@@ -151,8 +152,11 @@ class videoRead(caffe.Layer):
     for ix, line in enumerate(f_lines):
       video = line.split(' ')[0].split('/')[1]
       l = int(line.split(' ')[1])
+      # print 'path_to_images = %s' % self.path_to_images
+      # print 'video = %s' % video
       frames = glob.glob('%s%s/*.jpg' %(self.path_to_images, video))
       num_frames = len(frames)
+      # print 'num_frames = %i' % num_frames
       video_dict[video] = {}
       video_dict[video]['frames'] = frames[0].split('.')[0] + '.%04d.jpg'
       video_dict[video]['reshape'] = (240,320)

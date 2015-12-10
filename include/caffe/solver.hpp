@@ -68,6 +68,9 @@ struct LayerHandles {
 
 typedef std::map<int, FetchKeep> IntSet;
 struct LayerInfo {
+  bool layer_need_backward;
+  vector<bool> bottom_need_backward;
+  bool local_param;
   int table_id;
   vector<uint> row_ids;
   vector<uint> history_data_row_ids;
@@ -111,6 +114,7 @@ class Solver {
   void InitTrainNet();
   void InitTestNets();
   void InitPs();
+  void SetPsParamValues();
   // The main entry of the solver function. In default, iter will be zero. Pass
   // in a non-zero iter number to resume training for a pre-trained net.
   virtual void Solve(const char* resume_file = NULL);

@@ -10,9 +10,11 @@ then
 fi
 
 NAME=${1%.*}
+echo $NAME
 FRAMES=$2
 BNAME=`basename $NAME`
 echo $BNAME
 mkdir -m 755 $BNAME
 
+echo $FRAMES $BNAME/$BNAME.%4d.jpg
 ffmpeg -i $1 -r $FRAMES $BNAME/$BNAME.%4d.jpg
