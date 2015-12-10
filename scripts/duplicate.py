@@ -4,6 +4,9 @@ from string import maketrans
 
 file_name = sys.argv[1]
 num_dups = int(sys.argv[2])
+intab = '%'
+if len(sys.argv) > 3:
+  intab = sys.argv[3]
 
 template_file = '%s.template' % (file_name)
 template_fd = open(template_file, 'r')
@@ -13,7 +16,6 @@ for i in range(num_dups):
   output_file = '%s.%i' % (file_name, i)
   output_fds.append(open(output_file, 'w'))
 
-intab = '%'
 for line in template_fd:
   for i in range(num_dups):
     outtab = str(i)

@@ -20,7 +20,7 @@ using std::cerr;
 using std::endl;
 using boost::make_shared;
 
-// #define MULTI_TABLE
+#define MULTI_TABLE
 #define LOCAL_DATA_IN_PS
 
 namespace caffe {

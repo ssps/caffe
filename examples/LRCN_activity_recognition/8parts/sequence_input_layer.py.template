@@ -3,7 +3,7 @@
 #Data layer for video.  Change flow_frames and RGB_frames to be the path to the flow and RGB frames.
 
 import sys
-sys.path.append('../../python')
+sys.path.append('../../../python')
 import caffe
 import io
 from PIL import Image
@@ -23,6 +23,8 @@ import copy
 
 flow_frames = 'flow_images/'
 RGB_frames = 'frames/'
+train_video_list = 'ucf101_split1_trainVideos.txt.$'
+test_video_list = 'ucf101_split1_testVideos.txt.$'
 test_frames = 16 
 train_frames = 16   # Number of frames per video
 test_buffer = 12
@@ -113,6 +115,10 @@ def advance_batch(result, sequence_generator, image_processor, pool):
     cm = np.ones(len(label_r))
     cm[0::16] = 0
     result['clip_markers'] = cm
+    # print "result['data']:"
+    # print result['data']
+    # print "result['label']:"
+    # print result['label']
 
 class BatchAdvancer():
     def __init__(self, result, sequence_generator, image_processor, pool):
@@ -137,7 +143,7 @@ class videoRead(caffe.Layer):
     self.height = 227
     self.width = 227
     self.path_to_images = RGB_frames 
-    self.video_list = 'ucf101_split1_testVideos.txt' 
+    self.video_list = test_video_list
 
   def setup(self, bottom, top):
     random.seed(10)
@@ -267,8 +273,8 @@ class videoReadTrain_flow(videoRead):
     self.channels = 3
     self.height = 227
     self.width = 227
-    self.path_to_images = flow_frames 
-    self.video_list = 'ucf101_split1_trainVideos.txt' 
+    self.path_to_images = flow_frames
+    self.video_list = train_video_list
 
 class videoReadTest_flow(videoRead):
 
@@ -282,8 +288,8 @@ class videoReadTest_flow(videoRead):
     self.channels = 3
     self.height = 227
     self.width = 227
-    self.path_to_images = flow_frames 
-    self.video_list = 'ucf101_split1_testVideos.txt' 
+    self.path_to_images = flow_frames
+    self.video_list = test_video_list
 
 class videoReadTrain_RGB(videoRead):
 
@@ -298,7 +304,7 @@ class videoReadTrain_RGB(videoRead):
     self.height = 227
     self.width = 227
     self.path_to_images = RGB_frames 
-    self.video_list = 'ucf101_split1_trainVideos.txt' 
+    self.video_list = train_video_list
 
 class videoReadTest_RGB(videoRead):
 
@@ -313,4 +319,4 @@ class videoReadTest_RGB(videoRead):
     self.height = 227
     self.width = 227
     self.path_to_images = RGB_frames 
-    self.video_list = 'ucf101_split1_testVideos.txt' 
+    self.video_list = test_video_list
