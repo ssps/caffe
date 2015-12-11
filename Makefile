@@ -353,7 +353,7 @@ INCLUDE_DIRS += ../../lazy-table-module/include
 # LIBRARY_DIRS += /tank/projects/biglearning/hengganc/install-ubuntu14/cudnn-6.5-linux-x64-v2
 # INCLUDE_DIRS += /tank/projects/biglearning/hengganc/install-ubuntu14/cudnn-6.5-linux-x64-v2
 LDFLAGS += -Wl,-rpath,/tank/projects/biglearning/hengganc/LazyTable/flat-map
-LDFLAGS += -Wl,-rpath,/tank/projects/biglearning/hengganc/cudnn-6.5-linux-x64-v2
+# LDFLAGS += -Wl,-rpath,/tank/projects/biglearning/hengganc/cudnn-6.5-linux-x64-v2
 
 # Automatic dependency generation (nvcc is handled separately)
 CXXFLAGS += -MMD -MP

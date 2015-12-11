@@ -1049,48 +1049,54 @@ void Solver<float>::SetPsParamValues() {
   }
   vector<shared_ptr<Layer<float> > >& layers = this->net_->layers_;
   /* Set initial parameter values */
-  if (ps_config_.worker_id == 0) {
-    for (int layer_id = 0; layer_id < layer_infos_.size(); layer_id++) {
-      shared_ptr<Layer<float> >& layer = layers[layer_id];
-      LayerInfo& layer_info = layer_infos_[layer_id];
-      LayerHandles& layer_handles = layer_info.layer_handles[0];
-      if (layer_info.param_infos.size()) {
-        /* Pre-write */
-        RowOpVal *inc_buffer;
-        if (!layer_info.local_param) {
-          ps_->preinc_batch(&inc_buffer, layer_handles.prewrite_handle);
-        } else {
-          ps_->localaccess_batch(&inc_buffer, layer_handles.prewrite_handle);
+  for (int layer_id = 0; layer_id < layer_infos_.size(); layer_id++) {
+    shared_ptr<Layer<float> >& layer = layers[layer_id];
+    LayerInfo& layer_info = layer_infos_[layer_id];
+    LayerHandles& layer_handles = layer_info.layer_handles[0];
+    if (layer_info.param_infos.size()) {
+      if (!layer_info.local_param) {
+        if (ps_config_.worker_id != 0) {
+        // if (ps_config_.worker_id == 1) {
+          continue;
         }
-        float *params_vals = reinterpret_cast<float *>(inc_buffer);
-        for (int param_id = 0;
-            param_id < layer_info.param_infos.size(); param_id++) {
-          int param_val_offset = layer_info.param_infos[param_id].val_offset;
-          float *param_vals = &params_vals[param_val_offset];
-          shared_ptr<Blob<float> >& param = layer->blobs()[param_id];
-          param->set_gpu_data(param_vals, false);
-          /* "false" means that we don't change head here,
-           * because we want to keep what's currently in CPU memory */
-        }
-        /* Write */
-        for (int param_id = 0;
-            param_id < layer_info.param_infos.size(); param_id++) {
-          /* Values are filled in CPU memory, do a gpu_data() call to copy them
-           * to GPU memory */
-          shared_ptr<Blob<float> >& param = layer->blobs()[param_id];
-          param->gpu_data();
-          // const float *param_data = param->gpu_data();
-          // float param_dot;
-          // caffe_gpu_dot<float>(param->count(), param_data, param_data, &param_dot);
-          // LOG(INFO) << "param_dot = " << param_dot;
-          param->set_gpu_data(NULL, true);
-          /* "true" means that we don't keep CPU data */
-        }
-        if (!layer_info.local_param) {
-          ps_->inc_batch(layer_handles.write_handle);
-        } else {
-          ps_->postlocalaccess_batch(layer_handles.write_handle);
-        }
+      } else {
+        // continue;
+      }
+      /* Pre-write */
+      RowOpVal *inc_buffer;
+      if (!layer_info.local_param) {
+        ps_->preinc_batch(&inc_buffer, layer_handles.prewrite_handle);
+      } else {
+        ps_->localaccess_batch(&inc_buffer, layer_handles.prewrite_handle);
+      }
+      float *params_vals = reinterpret_cast<float *>(inc_buffer);
+      for (int param_id = 0;
+          param_id < layer_info.param_infos.size(); param_id++) {
+        int param_val_offset = layer_info.param_infos[param_id].val_offset;
+        float *param_vals = &params_vals[param_val_offset];
+        shared_ptr<Blob<float> >& param = layer->blobs()[param_id];
+        param->set_gpu_data(param_vals, false);
+        /* "false" means that we don't change head here,
+         * because we want to keep what's currently in CPU memory */
+      }
+      /* Write */
+      for (int param_id = 0;
+          param_id < layer_info.param_infos.size(); param_id++) {
+        /* Values are filled in CPU memory, do a gpu_data() call to copy them
+         * to GPU memory */
+        shared_ptr<Blob<float> >& param = layer->blobs()[param_id];
+        param->gpu_data();
+        // const float *param_data = param->gpu_data();
+        // float param_dot;
+        // caffe_gpu_dot<float>(param->count(), param_data, param_data, &param_dot);
+        // LOG(INFO) << "param_dot = " << param_dot;
+        param->set_gpu_data(NULL, true);
+        /* "true" means that we don't keep CPU data */
+      }
+      if (!layer_info.local_param) {
+        ps_->inc_batch(layer_handles.write_handle);
+      } else {
+        ps_->postlocalaccess_batch(layer_handles.write_handle);
       }
     }
   }
@@ -1114,11 +1120,11 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
    * the testing network has the same topology as the training network. */
   tbb::tick_count tick_start;
 
-  // if (test) {
-    // LOG(INFO) << "TEST";
-  // } else {
-    // LOG(INFO) << "TRAIN";
-  // }
+  if (test) {
+    LOG(INFO) << "TEST";
+  } else {
+    LOG(INFO) << "TRAIN";
+  }
 
   /* Forward */
   // LOG(INFO) << "Forward";
@@ -1367,6 +1373,15 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
             (tbb::tick_count::now() - tick_start).seconds();
       }
 
+      // for (int param_id = 0;
+          // param_id < layer_info.param_infos.size(); param_id++) {
+        // shared_ptr<Blob<float> >& param = layer->blobs()[param_id];
+        // const float *param_vals = param->gpu_diff();
+        // float param_dot;
+        // caffe_gpu_dot<float>(param->count(), param_vals, param_vals, &param_dot);
+        // LOG(INFO) << "param_dot = " << param_dot;
+      // }
+
       tick_start = tbb::tick_count::now();
 #if defined(LOCAL_DATA_IN_PS)
       /* Release intermediate data blobs */
@@ -1403,12 +1418,18 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
       }
 
       if (layer_info.param_infos.size()) {
+        LOG(INFO) << "Layer " << layer_id << ": " << layer_names[layer_id];
         // LOG(INFO) << "Finish writing";
         tick_start = tbb::tick_count::now();
         for (int param_id = 0;
             param_id < layer_info.param_infos.size(); param_id++) {
           int global_param_id =
               layer_info.param_infos[param_id].global_param_id;
+          shared_ptr<Blob<float> >& param = layer->blobs()[param_id];
+          const float *param_vals = param->gpu_diff();
+          float param_dot;
+          caffe_gpu_dot<float>(param->count(), param_vals, param_vals, &param_dot);
+          LOG(INFO) << "param_dot #" << global_param_id << " = " << param_dot;
           if (!test) {
             /* Adjust gradient */
             float rate = GetLearningRate();
@@ -1418,7 +1439,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
             ComputeUpdateValue(global_param_id, rate);
             CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
           }
-          shared_ptr<Blob<float> >& param = layer->blobs()[param_id];
+          // shared_ptr<Blob<float> >& param = layer->blobs()[param_id];
           param->gpu_diff();
             /* Make sure everything is copied to GPU memory */
           param->set_gpu_diff(NULL, true);
@@ -1574,7 +1595,8 @@ void Solver<Dtype>::Step(int iters) {
       Snapshot();
     }
 
-    if (iter_ % 1000 == 0 || iter_ == stop_iter) {
+    if ((param_.test_interval() && iter_ % param_.test_interval() == 0)
+          || iter_ == stop_iter) {
       double training_time = (tbb::tick_count::now() - tick_start).seconds();
       double read_time = 0;
       double write_time = 0;
@@ -1587,6 +1609,7 @@ void Solver<Dtype>::Step(int iters) {
         compute_time += layer_infos_[i].fw_compute_time;
         compute_time += layer_infos_[i].bw_compute_time;
       }
+      LOG(INFO) << "Worker: " << ps_config_.worker_id;
       LOG(INFO) << "Read PS time: " << read_time;
       LOG(INFO) << "Write PS time: " << write_time;
       LOG(INFO) << "Compute time: " << compute_time;
@@ -1738,7 +1761,8 @@ void Solver<Dtype>::Test(const int test_net_id) {
                       << " = " << loss_weight * mean_score << " loss)";
     }
     LOG(INFO) << "    Test net output #" << i << ": " << output_name << " = "
-              << mean_score << loss_msg_stream.str();
+              << mean_score << loss_msg_stream.str()
+              << " worker" << ps_config_.worker_id;
   }
 }
 
