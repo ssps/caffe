@@ -142,6 +142,9 @@ void CuDNNConvolutionLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top,
       CUDA_CHECK(cudaStreamSynchronize(stream_[g]));
     }
   }
+
+  /* TODO: shouldn't have this function */
+  ComputeDiff(top, propagate_down, bottom);
 }
 
 template <typename Dtype>

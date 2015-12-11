@@ -99,8 +99,8 @@ void BaseConvolutionLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
   }
   // Propagate gradients to the parameters (as directed by backward pass).
   this->param_propagate_down_.resize(this->blobs_.size(), true);
-  /* Cui: InitializeValues() called explicitly in solver */
-  // this->InitializeValues();
+  /* TODO: shouldn't have this function */
+  this->InitializeValues();
 }
 
 template <typename Dtype>

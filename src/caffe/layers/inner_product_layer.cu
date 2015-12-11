@@ -35,6 +35,8 @@ void InnerProductLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top,
         top_diff, this->blobs_[0]->gpu_data(), (Dtype)0.,
         bottom[0]->mutable_gpu_diff());
   }
+  /* TODO: shouldn't have this function */
+  ComputeDiff(top, propagate_down, bottom);
 }
 
 template <typename Dtype>

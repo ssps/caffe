@@ -1326,11 +1326,6 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
         layer->Backward(top_vecs[layer_id], layer_info.bottom_need_backward,
             bottom_vecs[layer_id]);
         CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
-        /* Compute diff */
-        // LOG(INFO) << "Compute diff";
-        layer->ComputeDiff(top_vecs[layer_id], layer_info.bottom_need_backward,
-            bottom_vecs[layer_id]);
-        CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
         layer_info.bw_compute_time +=
             (tbb::tick_count::now() - tick_start).seconds();
       }
