@@ -5,7 +5,9 @@ export PYTHONPATH=.
 
 python ../../../scripts/duplicate.py lstm_solver_RGB.prototxt 8
 python ../../../scripts/duplicate.py train_test_lstm_RGB.prototxt 8
+python ../../../scripts/duplicate.py sequence_input_layer.py 8 $ sequence_input_layer%i.py
 mkdir $1
+pwd > $1/pwd
 git status > $1/git-status
 git show > $1/git-show
 git diff > $1/git-diff

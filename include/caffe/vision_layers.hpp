@@ -318,7 +318,8 @@ class LRNLayer : public Layer<Dtype> {
 
   virtual inline const char* type() const { return "LRN"; }
   virtual inline int ExactNumBottomBlobs() const { return 1; }
-  virtual inline int ExactNumTopBlobs() const { return 1; }
+  virtual inline int ExactNumTopBlobs() const { return 2; }
+    /* top[1] is used for intermediate scale_ data. */
 
  protected:
   virtual void Forward_cpu(const vector<Blob<Dtype>*>& bottom,
@@ -352,10 +353,6 @@ class LRNLayer : public Layer<Dtype> {
   int channels_;
   int height_;
   int width_;
-
-  // Fields used for normalization ACROSS_CHANNELS
-  // scale_ stores the intermediate summing results
-  Blob<Dtype> scale_;
 
   // Fields used for normalization WITHIN_CHANNEL
   shared_ptr<SplitLayer<Dtype> > split_layer_;

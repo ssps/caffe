@@ -29,7 +29,10 @@ bool InternalThread::StartInternalThread() {
 bool InternalThread::WaitForInternalThreadToExit() {
   if (is_started()) {
     try {
-      thread_->join();
+      // thread_->join();
+      while (!thread_->try_join_for(boost::chrono::milliseconds(30000))) {
+        LOG(INFO) << "*** Thread join timed out!";
+      }
     } catch (...) {
       return false;
     }

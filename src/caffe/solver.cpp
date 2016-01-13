@@ -5,6 +5,7 @@
 #include <vector>
 
 #include <boost/make_shared.hpp>
+#include <boost/format.hpp>
 
 #include <tbb/tick_count.h>
 
@@ -316,20 +317,25 @@ void Solver<float>::InitPs() {
     for (int i = 0; i < bottom_imb_ids.size(); i++) {
       int blob_id = bottom_imb_ids[i];
       if (net_output_set.count(blob_id)) {
+        LOG(INFO) << "Blob #" << blob_id << " is an output blob";
         /* Do not stream output blobs */
         continue;
       }
-      /* Use (fetch, keep) all bottom data blobs in the forward pass */
+      /* In the forward pass, use (fetch, keep) all bottom data blobs */
       imbs_used_fw[blob_id] = FetchKeep(true, true);
-      /* Use (fetch, no keep) all bottom data blobs in the backward pass,
-       * except for data layers */
-      if (layer_types[layer_id] != "Data") {
+      /* In the forward pass, use no bottom diff blobs */
+      /* In the backward pass, use (fetch, no keep) all bottom data blobs,
+       * except for Data layers */
+      if (layer_types[layer_id] == "Data") {
+        /* Not used */
+      } else {
         imbs_used_bw[blob_id] = FetchKeep(true, false);
       }
-      /* Use no bottom diff blobs in the forward pass */
-      /* Use (no fetch, keep) all bottom diff blobs in the backward pass,
-       * except for data layers */
-      if (layer_types[layer_id] != "Data") {
+      /* In the backward pass, use (no fetch, keep) all bottom diff blobs,
+       * except for Data layers */
+      if (layer_types[layer_id] == "Data") {
+        /* Not used */
+      } else {
         imb_diffs_used_bw[blob_id] = FetchKeep(false, true);
       }
     }
@@ -337,26 +343,35 @@ void Solver<float>::InitPs() {
       int blob_id = top_imb_ids[i];
       if (net_output_set.count(blob_id)) {
         /* Do not stream output blobs */
+        LOG(INFO) << "Blob #" << blob_id << " is an output blob";
         continue;
       }
-      /* Use (no fetch, keep) all top data blobs in the forward pass */
+      /* In the forward pass, use (no fetch, keep) all top data blobs */
       imbs_used_fw[blob_id] = FetchKeep(false, true);
-      /* Use (no fetch, keep) the top diff blobs only in loss layers
-       * in the forward pass */
+      /* In the forward pass, use (no fetch, keep) the top diff blobs
+       * only in loss layers */
       if (layer_types[layer_id] == "SoftmaxWithLoss") {
         imb_diffs_used_fw[blob_id] = FetchKeep(false, true);
       }
-      /* Use (fetch, no keep) the top data blobs only in ReLU, LRN, Pooling,
-       * and SoftmaxWithLoss layers in the backward pass */
+      /* In the backward pass, use (fetch, no keep) the top data blobs
+       * only in ReLU, LRN, Pooling, Dropout,
+       * and SoftmaxWithLoss layers */
       if (layer_types[layer_id] == "ReLU" ||
           layer_types[layer_id] == "LRN" ||
           layer_types[layer_id] == "Pooling" ||
+          layer_types[layer_id] == "Dropout" ||
           layer_types[layer_id] == "SoftmaxWithLoss") {
         imbs_used_bw[blob_id] = FetchKeep(true, false);
       }
-      /* Use (fetch, no keep) all top diff blobs in the backward pass,
-       * except for data layers */
-      if (layer_types[layer_id] != "Data") {
+      /* In the backward pass, use (fetch, no keep) all top diff blobs,
+       * except for Data layers, top[1] of LRN layers,
+       * top[1] of Pooling layers, and top[1] of Dropout layers */
+      if (layer_types[layer_id] == "Data" ||
+          (layer_types[layer_id] == "LRN" && i > 0) ||
+          (layer_types[layer_id] == "Pooling" && i > 0) ||
+          (layer_types[layer_id] == "Dropout" && i > 0)) {
+        /* Do not use */
+      } else {
         imb_diffs_used_bw[blob_id] = FetchKeep(true, false);
       }
     }
@@ -420,134 +435,9 @@ void Solver<float>::InitPs() {
     cout << layer_id << ',' << input_size << ',' << imb_size
          << ',' << param_size << ',' << update_size << endl;
   }
-  cout << "\nForwardbackward two layer sizes:" << endl;
-  for (int layer_id = 0; layer_id < layers.size() - 1; layer_id++) {
-    LayerInfo& layer_info = layer_infos_[layer_id];
-    int input_size = 0;
-    int imb_size = 0;
-    int param_size = 0;
-    int update_size = 0;
-    IntSet& imbs_used = layer_info.imbs_used_fw;
-    IntSet& imb_diffs_used = layer_info.imb_diffs_used_fw;
-    for (IntSet::iterator i = imbs_used.begin(); i != imbs_used.end(); i++) {
-      int imb_id = i->first;
-      if (imb_id < 2) {
-        input_size += imbs[imb_id]->count();
-      } else {
-        imb_size += imbs[imb_id]->count();
-      }
-    }
-    for (IntSet::iterator i = imb_diffs_used.begin();
-         i != imb_diffs_used.end(); i++) {
-      int imb_id = i->first;
-      imb_size += imbs[imb_id]->count();
-    }
-    param_size += layer_info.num_vals;
-    LayerInfo& next_layer_info = layer_infos_[layer_id + 1];
-    IntSet& next_imbs_used = next_layer_info.imbs_used_fw;
-    IntSet& next_imb_diffs_used = next_layer_info.imb_diffs_used_fw;
-    for (IntSet::iterator i = next_imbs_used.begin();
-         i != next_imbs_used.end(); i++) {
-      int imb_id = i->first;
-      if (!imbs_used.count(imb_id)) {
-        if (imb_id < 2) {
-          input_size += imbs[imb_id]->count();
-        } else {
-          imb_size += imbs[imb_id]->count();
-        }
-      }
-    }
-    for (IntSet::iterator i = next_imb_diffs_used.begin();
-         i != next_imb_diffs_used.end(); i++) {
-      int imb_id = i->first;
-      if (!imb_diffs_used.count(imb_id)) {
-        imb_size += imbs[imb_id]->count();
-      }
-    }
-    param_size += next_layer_info.num_vals;
-    cout << layer_id << ',' << input_size << ',' << imb_size
-         << ',' << param_size << ',' << update_size << endl;
-  }
-  {
-    /* For the last layer */
-    int layer_id = layer_infos_.size() - 1;
-    LayerInfo& layer_info = layer_infos_[layer_id];
-    int input_size = 0;
-    int imb_size = 0;
-    int param_size = 0;
-    int update_size = 0;
-    IntSet& imbs_used = layer_info.imbs_used_bw;
-    IntSet& imb_diffs_used = layer_info.imb_diffs_used_bw;
-    for (IntSet::iterator i = imbs_used.begin(); i != imbs_used.end(); i++) {
-      int imb_id = i->first;
-      if (imb_id < 2) {
-        input_size += imbs[imb_id]->count();
-      } else {
-        imb_size += imbs[imb_id]->count();
-      }
-    }
-    for (IntSet::iterator i = imb_diffs_used.begin();
-         i != imb_diffs_used.end(); i++) {
-      int imb_id = i->first;
-      imb_size += imbs[imb_id]->count();
-    }
-    param_size += layer_info.num_vals;
-    update_size += layer_info.num_vals;
-    imb_size += layer_info.num_vals;
-    cout << layer_id << ',' << input_size << ',' << imb_size
-         << ',' << param_size << ',' << update_size << endl;
-  }
-  for (int layer_id = layer_infos_.size() - 1; layer_id >= 1; layer_id--) {
-    LayerInfo& layer_info = layer_infos_[layer_id];
-    int input_size = 0;
-    int imb_size = 0;
-    int param_size = 0;
-    int update_size = 0;
-    IntSet& imbs_used = layer_info.imbs_used_bw;
-    IntSet& imb_diffs_used = layer_info.imb_diffs_used_bw;
-    for (IntSet::iterator i = imbs_used.begin(); i != imbs_used.end(); i++) {
-      int imb_id = i->first;
-      if (imb_id < 2) {
-        input_size += imbs[imb_id]->count();
-      } else {
-        imb_size += imbs[imb_id]->count();
-      }
-    }
-    for (IntSet::iterator i = imb_diffs_used.begin();
-         i != imb_diffs_used.end(); i++) {
-      int imb_id = i->first;
-      imb_size += imbs[imb_id]->count();
-    }
-    param_size += layer_info.num_vals * 3;
-    LayerInfo& next_layer_info = layer_infos_[layer_id - 1];
-    IntSet& next_imbs_used = next_layer_info.imbs_used_bw;
-    IntSet& next_imb_diffs_used = next_layer_info.imb_diffs_used_bw;
-    for (IntSet::iterator i = next_imbs_used.begin();
-         i != next_imbs_used.end(); i++) {
-      int imb_id = i->first;
-      if (!imbs_used.count(imb_id)) {
-        if (imb_id < 2) {
-          input_size += imbs[imb_id]->count();
-        } else {
-          imb_size += imbs[imb_id]->count();
-        }
-      }
-    }
-    for (IntSet::iterator i = next_imb_diffs_used.begin();
-         i != next_imb_diffs_used.end(); i++) {
-      int imb_id = i->first;
-      if (!imb_diffs_used.count(imb_id)) {
-        imb_size += imbs[imb_id]->count();
-      }
-    }
-    param_size += layer_info.num_vals;
-    update_size += layer_info.num_vals;
-    imb_size += layer_info.num_vals;
-    cout << layer_id << ',' << input_size << ',' << imb_size
-         << ',' << param_size << ',' << update_size << endl;
-  }
 
   /* Decide imbs to accesss/release in forward pass */
+  IntSet empty_set;
   for (int layer_id = 0; layer_id < layers.size(); layer_id++) {
     LayerInfo& layer_info = layer_infos_[layer_id];
     IntSet& imbs_used = layer_info.imbs_used_fw;
@@ -557,12 +447,18 @@ void Solver<float>::InitPs() {
     vector<ImbInfo>& imb_diffs_to_access = layer_info.imb_diffs_to_access_fw;
     for (IntSet::iterator i = imbs_used.begin(); i != imbs_used.end(); i++) {
       int imb_id = i->first;
+      if (imb_id == 6) {
+        LOG(INFO) << "See imb #6";
+      }
       if (!imb_data_infos_[imb_id].data_in_mem) {
         imb_data_infos_[imb_id].data_in_mem = true;
         ImbInfo imb_info;
         imb_info.global_imb_id = imb_id;
         imb_info.fetch = i->second.fetch;
         imbs_to_access.push_back(imb_info);
+        if (imb_id == 6) {
+          LOG(INFO) << "Access imb #6";
+        }
       }
     }
     for (IntSet::iterator i = imb_diffs_used.begin();
@@ -579,10 +475,44 @@ void Solver<float>::InitPs() {
     /* Decide imbs to release in forward pass */
     vector<ImbInfo>& imbs_to_release = layer_info.imbs_to_release_fw;
     vector<ImbInfo>& imb_diffs_to_release = layer_info.imb_diffs_to_release_fw;
+    /* Decide the next forward/backward layer */
+    int next_layer_id = layer_id + 1;
+    bool forward = true;
+    if (next_layer_id >= layers.size()) {
+      /* The next layer should be a backward layer */
+      forward = false;
+      next_layer_id = layers.size() - 1;
+      while (next_layer_id >= 0) {
+        if (layer_need_backward[next_layer_id]) {
+          break;
+        }
+        next_layer_id--;
+      }
+    }
+    IntSet *imbs_used_next_layer_ptr = NULL;
+    IntSet *imb_diffs_used_next_layer_ptr = NULL;
+    if (forward) {
+      CHECK(next_layer_id >= 0 && next_layer_id < layers.size());
+      imbs_used_next_layer_ptr =
+          &layer_infos_[next_layer_id].imbs_used_fw;
+      imb_diffs_used_next_layer_ptr =
+          &layer_infos_[next_layer_id].imb_diffs_used_fw;
+    } else {
+      if (next_layer_id >= 0) {
+        CHECK(next_layer_id < layers.size());
+        CHECK(layer_need_backward[next_layer_id]);
+        imbs_used_next_layer_ptr =
+            &layer_infos_[next_layer_id].imbs_used_bw;
+        imb_diffs_used_next_layer_ptr =
+            &layer_infos_[next_layer_id].imb_diffs_used_bw;
+      } else {
+        /* The current layer is the last one, we should release all blobs */
+        imbs_used_next_layer_ptr = &empty_set;
+        imb_diffs_used_next_layer_ptr = &empty_set;
+      }
+    }
     /* Release the blobs that are not used in the next layer */
-    IntSet& imbs_used_next_layer = layer_id < layers.size() - 1 ?
-        layer_infos_[layer_id + 1].imbs_used_fw :
-        layer_infos_[layer_id].imbs_used_bw;
+    IntSet& imbs_used_next_layer = *imbs_used_next_layer_ptr;
     for (IntSet::iterator i = imbs_used.begin(); i != imbs_used.end(); i++) {
       int imb_id = i->first;
       if (!imbs_used_next_layer.count(imb_id)) {
@@ -594,9 +524,7 @@ void Solver<float>::InitPs() {
         imbs_to_release.push_back(imb_info);
       }
     }
-    IntSet& imb_diffs_used_next_layer = layer_id < layers.size() - 1 ?
-        layer_infos_[layer_id + 1].imb_diffs_used_fw :
-        layer_infos_[layer_id].imb_diffs_used_bw;
+    IntSet& imb_diffs_used_next_layer = *imb_diffs_used_next_layer_ptr;
     for (IntSet::iterator i = imb_diffs_used.begin();
          i != imb_diffs_used.end(); i++) {
       int imb_id = i->first;
@@ -610,19 +538,9 @@ void Solver<float>::InitPs() {
       }
     }
   }
-  // /* Decide the last backward layer.
-   // * We assume all layers above it need backward.
-   // * Actually data layer is the only one that I think doesn't need backward. */
-  // /* Decide imbs to accesss/release in backward pass */
-  // int last_layer_needs_backward = -1;
-  // for (int layer_id = layer_infos_.size() - 1; layer_id >= 0; layer_id--) {
-    // if (layer_need_backward[layer_id]) {
-      // last_layer_needs_backward = layer_id;
-    // }
-  // }
   for (int layer_id = layer_infos_.size() - 1; layer_id >= 0; layer_id--) {
     if (!layer_need_backward[layer_id]) {
-      /* We assume only the data layer doesn't need backward */
+      LOG(INFO) << "Layer " << layer_names[layer_id] << " doesn't need backward";
       continue;
     }
     LayerInfo& layer_info = layer_infos_[layer_id];
@@ -656,18 +574,16 @@ void Solver<float>::InitPs() {
     /* Decide imbs to release in backward pass */
     vector<ImbInfo>& imbs_to_release = layer_info.imbs_to_release_bw;
     vector<ImbInfo>& imb_diffs_to_release = layer_info.imb_diffs_to_release_bw;
-    IntSet empty_set;
-    IntSet *imbs_used_next_layer_ptr = &empty_set;
     int next_layer_id = layer_id - 1;
     while (next_layer_id >= 0) {
       if (layer_need_backward[next_layer_id]) {
-        imbs_used_next_layer_ptr =
-            &layer_infos_[next_layer_id].imbs_used_bw;
         break;
       }
       next_layer_id--;
     }
-    IntSet& imbs_used_next_layer = *imbs_used_next_layer_ptr;
+    
+    IntSet& imbs_used_next_layer = (next_layer_id >= 0) ?
+        layer_infos_[next_layer_id].imbs_used_bw : empty_set;
     for (IntSet::iterator i = imbs_used.begin(); i != imbs_used.end(); i++) {
       int imb_id = i->first;
       if (!imbs_used_next_layer.count(imb_id)) {
@@ -679,17 +595,8 @@ void Solver<float>::InitPs() {
         imbs_to_release.push_back(imb_info);
       }
     }
-    IntSet *imb_diffs_used_next_layer_ptr = &empty_set;
-    next_layer_id = layer_id - 1;
-    while (next_layer_id >= 0) {
-      if (layer_need_backward[next_layer_id]) {
-        imb_diffs_used_next_layer_ptr =
-            &layer_infos_[next_layer_id].imb_diffs_used_bw;
-        break;
-      }
-      next_layer_id--;
-    }
-    IntSet& imb_diffs_used_next_layer = *imb_diffs_used_next_layer_ptr;
+    IntSet& imb_diffs_used_next_layer = (next_layer_id >= 0) ?
+        layer_infos_[next_layer_id].imb_diffs_used_bw : empty_set;
     for (IntSet::iterator i = imb_diffs_used.begin();
          i != imb_diffs_used.end(); i++) {
       int imb_id = i->first;
@@ -793,11 +700,28 @@ void Solver<float>::InitPs() {
   ps_->thread_start();
 
   /* Virtual iteration */
+  /* We hope the allocated space is contiguous in the cache, so:
+   * on allocating, we first allocate model parameters,
+   * and then allocate intermediate blobs (likely to be top blobs);
+   * on releasing, we first release intermediate blobs
+   * (likely to be bottom blobs), and then model parameters. */
   for (int batch_id = 0; batch_id < ps_config_.batches_per_clock; batch_id++) {
     /* Virtual iteration, forward pass */
     for (int layer_id = 0; layer_id < layer_infos_.size(); layer_id++) {
       LayerInfo& layer_info = layer_infos_[layer_id];
       LayerHandles& layer_handles = layer_info.layer_handles[batch_id];
+      /* Read model parameters */
+      if (layer_info.param_infos.size()) {
+        if (!layer_info.local_param) {
+          layer_handles.read_handle = ps_->virtual_read_batch(
+              layer_info.table_id, layer_info.row_ids,
+              ps_config_.slack, layer_info.num_vals);
+        } else {
+          layer_handles.read_handle = ps_->virtual_localaccess_batch(
+              layer_info.row_ids, layer_info.num_vals, true /* fetch */);
+        }
+        // cerr << "read " << layer_handles.read_handle << " for " << layer_info.row_ids.size() << endl;
+      }
 #if defined(LOCAL_DATA_IN_PS)
       /* Access intermediate data blobs */
       for (int i = 0; i < layer_info.imbs_to_access_fw.size(); i++) {
@@ -811,6 +735,7 @@ void Solver<float>::InitPs() {
         total_size += access_info.num_vals;
         read_size += imb_info.fetch ? access_info.num_vals : 0;
         CHECK_GE(read_size, 0);
+        // cerr << "read " << handle << " for " << access_info.row_ids.size() << endl;
       }
       /* Access intermediate diff blobs */
       for (int i = 0; i < layer_info.imb_diffs_to_access_fw.size(); i++) {
@@ -824,19 +749,9 @@ void Solver<float>::InitPs() {
         total_size += access_info.num_vals;
         read_size += imb_info.fetch ? access_info.num_vals : 0;
         CHECK_GE(read_size, 0);
+        // cerr << "read " << handle << " for " << access_info.row_ids.size() << endl;
       }
 #endif
-      /* Read model parameters */
-      if (layer_info.param_infos.size()) {
-        if (!layer_info.local_param) {
-          layer_handles.read_handle = ps_->virtual_read_batch(
-              layer_info.table_id, layer_info.row_ids,
-              ps_config_.slack, layer_info.num_vals);
-        } else {
-          layer_handles.read_handle = ps_->virtual_localaccess_batch(
-              layer_info.row_ids, layer_info.num_vals, true /* fetch */);
-        }
-      }
 #if defined(LOCAL_DATA_IN_PS)
       /* Release intermediate data blobs */
       for (int i = 0; i < layer_info.imbs_to_release_fw.size(); i++) {
@@ -847,6 +762,7 @@ void Solver<float>::InitPs() {
         int& handle = layer_handles.imbs_to_release_fw[i];
         handle = ps_->virtual_postlocalaccess_batch(
             access_info.data_handle, imb_info.keep);
+        // cerr << "release " << access_info.data_handle << " for " << access_info.row_ids.size() << endl;
         access_info.data_handle = -1;
         write_size += imb_info.keep ? access_info.num_vals : 0;
         CHECK_GE(write_size, 0);
@@ -860,6 +776,7 @@ void Solver<float>::InitPs() {
         int& handle = layer_handles.imb_diffs_to_release_fw[i];
         handle = ps_->virtual_postlocalaccess_batch(
             access_info.data_handle, imb_info.keep);
+        // cerr << "release " << access_info.data_handle << " for " << access_info.row_ids.size() << endl;
         access_info.data_handle = -1;
         write_size += imb_info.keep ? access_info.num_vals : 0;
         CHECK_GE(write_size, 0);
@@ -874,6 +791,7 @@ void Solver<float>::InitPs() {
           layer_handles.postread_handle = ps_->virtual_postlocalaccess_batch(
               layer_handles.read_handle, false /* don't need to write back */);
         }
+        // cerr << "release " << layer_handles.read_handle << " for " << layer_info.row_ids.size() << endl;
       }
     }
     /* Virtual iteration, backward pass */
@@ -885,6 +803,22 @@ void Solver<float>::InitPs() {
       }
       LayerInfo& layer_info = layer_infos_[layer_id];
       LayerHandles& layer_handles = layer_info.layer_handles[batch_id];
+      /* Read and prewrite model parameters */
+      if (layer_info.param_infos.size()) {
+        CHECK(!layer_info.local_param);
+        layer_handles.prewrite_handle = ps_->virtual_prewrite_batch(
+            layer_info.table_id, layer_info.row_ids, layer_info.num_vals);
+        layer_handles.bw_read_handle = ps_->virtual_read_batch(
+            layer_info.table_id, layer_info.row_ids,
+            ps_config_.slack, layer_info.num_vals);
+        layer_handles.history_access_handle =
+            ps_->virtual_localaccess_batch(
+                layer_info.history_data_row_ids, layer_info.num_vals,
+                /* fetch */ true);
+        // cerr << "read " << layer_handles.prewrite_handle << " for " << layer_info.row_ids.size() << endl;
+        // cerr << "read " << layer_handles.bw_read_handle << " for " << layer_info.row_ids.size() << endl;
+        // cerr << "read " << layer_handles.history_access_handle << " for " << layer_info.row_ids.size() << endl;
+      }
 #if defined(LOCAL_DATA_IN_PS)
       /* Access intermediate data blobs */
       for (int i = 0; i < layer_info.imbs_to_access_bw.size(); i++) {
@@ -899,6 +833,7 @@ void Solver<float>::InitPs() {
         total_size += access_info.num_vals;
         read_size += imb_info.fetch ? access_info.num_vals : 0;
         CHECK_GE(read_size, 0);
+        // cerr << "read " << handle << " for " << access_info.row_ids.size() << endl;
       }
       /* Access intermediate diff blobs */
       for (int i = 0; i < layer_info.imb_diffs_to_access_bw.size(); i++) {
@@ -913,21 +848,9 @@ void Solver<float>::InitPs() {
         total_size += access_info.num_vals;
         read_size += imb_info.fetch ? access_info.num_vals : 0;
         CHECK_GE(read_size, 0);
+        // cerr << "read " << handle << " for " << access_info.row_ids.size() << endl;
       }
 #endif
-      /* Read and prewrite model parameters */
-      if (layer_info.param_infos.size()) {
-        CHECK(!layer_info.local_param);
-        layer_handles.prewrite_handle = ps_->virtual_prewrite_batch(
-            layer_info.table_id, layer_info.row_ids, layer_info.num_vals);
-        layer_handles.bw_read_handle = ps_->virtual_read_batch(
-            layer_info.table_id, layer_info.row_ids,
-            ps_config_.slack, layer_info.num_vals);
-        layer_handles.history_access_handle =
-            ps_->virtual_localaccess_batch(
-                layer_info.history_data_row_ids, layer_info.num_vals,
-                /* fetch */ true);
-      }
 #if defined(LOCAL_DATA_IN_PS)
       /* Postaccess intermediate data blobs */
       for (int i = 0; i < layer_info.imbs_to_release_bw.size(); i++) {
@@ -939,6 +862,7 @@ void Solver<float>::InitPs() {
         int& handle = layer_handles.imbs_to_release_bw[i];
         handle = ps_->virtual_postlocalaccess_batch(
             access_info.data_handle, imb_info.keep);
+        // cerr << "release " << access_info.data_handle << " for " << access_info.row_ids.size() << endl;
         access_info.data_handle = -1;
         write_size += imb_info.keep ? access_info.num_vals : 0;
         CHECK_GE(write_size, 0);
@@ -953,6 +877,7 @@ void Solver<float>::InitPs() {
         int& handle = layer_handles.imb_diffs_to_release_bw[i];
         handle = ps_->virtual_postlocalaccess_batch(
             access_info.data_handle, imb_info.keep);
+        // cerr << "release " << access_info.data_handle << " for " << access_info.row_ids.size() << endl;
         access_info.data_handle = -1;
         write_size += imb_info.keep ? access_info.num_vals : 0;
         CHECK_GE(write_size, 0);
@@ -967,6 +892,9 @@ void Solver<float>::InitPs() {
         layer_handles.history_postaccess_handle =
             ps_->virtual_postlocalaccess_batch(
                 layer_handles.history_access_handle, /* keep */ true);
+        // cerr << "release " << layer_handles.prewrite_handle << " for " << layer_info.row_ids.size() << endl;
+        // cerr << "release " << layer_handles.bw_read_handle << " for " << layer_info.row_ids.size() << endl;
+        // cerr << "release " << layer_handles.history_access_handle << " for " << layer_info.row_ids.size() << endl;
       }
     }
   }
@@ -994,7 +922,7 @@ void Solver<float>::InitPs() {
 }
 
 template <>
-void Solver<float>::SetPsParamValues() {
+void SGDSolver<float>::InitPsValues() {
   if (ps_config_.no_ps) {
     return;
   }
@@ -1007,11 +935,8 @@ void Solver<float>::SetPsParamValues() {
     if (layer_info.param_infos.size()) {
       if (!layer_info.local_param) {
         if (ps_config_.worker_id != 0) {
-        // if (ps_config_.worker_id == 1) {
           continue;
         }
-      } else {
-        // continue;
       }
       /* Pre-write */
       RowOpVal *inc_buffer;
@@ -1026,29 +951,66 @@ void Solver<float>::SetPsParamValues() {
         int param_val_offset = layer_info.param_infos[param_id].val_offset;
         float *param_vals = &params_vals[param_val_offset];
         shared_ptr<Blob<float> >& param = layer->blobs()[param_id];
-        param->set_gpu_data(param_vals, false);
+        bool change_head = false;
+            /* "false" means that we will keep the head to be CPU_DATA.
+             * We want to keep what's currently in CPU memory */
+        param->set_gpu_data(param_vals, change_head);
         /* "false" means that we don't change head here,
          * because we want to keep what's currently in CPU memory */
-      }
-      /* Write */
-      for (int param_id = 0;
-          param_id < layer_info.param_infos.size(); param_id++) {
         /* Values are filled in CPU memory, do a gpu_data() call to copy them
          * to GPU memory */
-        shared_ptr<Blob<float> >& param = layer->blobs()[param_id];
         param->gpu_data();
         // const float *param_data = param->gpu_data();
         // float param_dot;
         // caffe_gpu_dot<float>(param->count(), param_data, param_data, &param_dot);
         // LOG(INFO) << "param_dot = " << param_dot;
-        param->set_gpu_data(NULL, true);
-        /* "true" means that we don't keep CPU data */
+        change_head = true;
+            /* "true" means that we will change the head to UNINITIALIZED */
+        param->set_gpu_data(NULL, change_head);
       }
+      /* Write */
       if (!layer_info.local_param) {
         ps_->inc_batch(layer_handles.write_handle);
       } else {
         ps_->postlocalaccess_batch(layer_handles.write_handle);
       }
+    }
+  }
+  /* Set initial updates history values */
+  for (int layer_id = 0; layer_id < layer_infos_.size(); layer_id++) {\
+    LayerInfo& layer_info = layer_infos_[layer_id];
+    LayerHandles& layer_handles = layer_info.layer_handles[0];
+    if (layer_info.param_infos.size()) {
+      if (!layer_info.local_param) {
+        if (ps_config_.worker_id != 0) {
+          continue;
+        }
+      }
+      /* Pre-write */
+      RowData *history_buffer;
+      ps_->localaccess_batch(
+          &history_buffer, layer_handles.history_access_handle);
+      float *history_vals = reinterpret_cast<float *>(history_buffer);
+      for (int param_id = 0;
+          param_id < layer_info.param_infos.size(); param_id++) {
+        int param_val_offset = layer_info.param_infos[param_id].val_offset;
+        float *history_param_vals = &history_vals[param_val_offset];
+        int global_param_id =
+            layer_info.param_infos[param_id].global_param_id;
+        shared_ptr<Blob<float> >& updates_history = history_[global_param_id];
+        bool change_head = false;
+            /* "false" means that we will keep the head to be CPU_DATA.
+             * We want to keep what's currently in CPU memory */
+        updates_history->set_gpu_data(history_param_vals, change_head);
+        /* Values are filled in CPU memory, do a gpu_data() call to copy them
+         * to GPU memory */
+        updates_history->gpu_data();
+        change_head = true;
+            /* "true" means that we will change the head to UNINITIALIZED */
+        updates_history->set_gpu_data(NULL, change_head);
+      }
+      /* Write */
+      ps_->postlocalaccess_batch(layer_handles.history_postaccess_handle);
     }
   }
   LOG(INFO) << "Set initial parameter values done";
@@ -1060,29 +1022,40 @@ void Solver<float>::SetPsParamValues() {
 template <>
 float SGDSolver<float>::ForwardBackwardUsingPs(
     const vector<Blob<float>* >& bottom,
-    const shared_ptr<Net<float> >& net, bool test) {
+    const shared_ptr<Net<float> >& net,
+    bool test, bool do_snapshot) {
   vector<shared_ptr<Layer<float> > >& layers = net->layers_;
   vector<vector<Blob<float>*> >& bottom_vecs = net->bottom_vecs_;
   vector<vector<Blob<float>*> >& top_vecs = net->top_vecs_;
   vector<shared_ptr<Blob<float> > >& imbs = net->blobs_;
+  vector<string>& layer_types = net->layer_types_;
   vector<string>& layer_names = net->layer_names_;
   /* When we test on the testing network, we will use the layer information
    * that is gathered using training network, so we are assuming
    * the testing network has the same topology as the training network. */
   tbb::tick_count tick_start;
 
-  // if (test) {
-    // LOG(INFO) << "TEST";
-  // } else {
-    // LOG(INFO) << "TRAIN";
-  // }
+  bool print_ = false;
+  // bool print_ = ps_config_.worker_id == 0;
+
+  if (print_) {
+    if (test) {
+      LOG(INFO) << "TEST";
+    } else {
+      LOG(INFO) << "TRAIN";
+    }
+  }
 
   /* Forward */
-  // LOG(INFO) << "Forward";
+  if (print_) {
+    LOG(INFO) << "Forward";
+  }
   float loss = 0;
   for (int batch_id = 0; batch_id < ps_config_.batches_per_clock; batch_id++) {
     for (int layer_id = 0; layer_id < layer_infos_.size(); layer_id++) {
-      // LOG(INFO) << "Layer " << layer_id << ": " << layer_names[layer_id];
+      if (print_) {
+        LOG(INFO) << "Layer " << layer_id << ": " << layer_names[layer_id];
+      }
       CHECK_LT(layer_id, layers.size());
       shared_ptr<Layer<float> >& layer = layers[layer_id];
       CHECK(layer);
@@ -1090,43 +1063,11 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
       LayerHandles& layer_handles = layer_info.layer_handles[batch_id];
 
       tick_start = tbb::tick_count::now();
-#if defined(LOCAL_DATA_IN_PS)
-      /* Access intermediate data blobs */
-      // LOG(INFO) << "Read intermediate data blobs";
-      for (int i = 0; i < layer_info.imbs_to_access_fw.size(); i++) {
-        ImbInfo& imb_info = layer_info.imbs_to_access_fw[i];
-        CHECK_LT(i, layer_handles.imbs_to_access_fw.size());
-        int handle = layer_handles.imbs_to_access_fw[i];
-        // LOG(INFO) << "Read data " << imb_info.global_imb_id;
-        CHECK_LT(imb_info.global_imb_id, imbs.size());
-        shared_ptr<Blob<float> >& imb = imbs[imb_info.global_imb_id];
-        RowOpVal *read_buffer;
-        ps_->localaccess_batch(&read_buffer, handle);
-        CHECK(!imb->check_gpu_data())
-            << "layer " << layer_names[layer_id] << " has gpu data "
-            << imb_info.global_imb_id;
-        imb->set_gpu_data(reinterpret_cast<float *>(read_buffer), true);
-      }
-      /* Access intermediate diff blobs */
-      // LOG(INFO) << "Read intermediate diff blobs";
-      for (int i = 0; i < layer_info.imb_diffs_to_access_fw.size(); i++) {
-        ImbInfo& imb_info = layer_info.imb_diffs_to_access_fw[i];
-        CHECK_LT(i, layer_handles.imb_diffs_to_access_fw.size());
-        int handle = layer_handles.imb_diffs_to_access_fw[i];
-        // LOG(INFO) << "Read data " << imb_info.global_imb_id;
-        CHECK_LT(imb_info.global_imb_id, imbs.size());
-        shared_ptr<Blob<float> >& imb = imbs[imb_info.global_imb_id];
-        RowOpVal *read_buffer;
-        ps_->localaccess_batch(&read_buffer, handle);
-        // LOG(INFO) << "buffer = " << read_buffer;
-        CHECK(!imb->check_gpu_diff())
-            << "layer " << layer_names[layer_id] << " has gpu diff";
-        imb->set_gpu_diff(reinterpret_cast<float *>(read_buffer), true);
-      }
-#endif
       /* Read model parameters */
       if (layer_info.param_infos.size()) {
-        // LOG(INFO) << "Read params: handle #" << layer_handles.read_handle;
+        if (print_) {
+          LOG(INFO) << "Read params: handle #" << layer_handles.read_handle;
+        }
         RowOpVal *read_buffer;
         if (!layer_info.local_param) {
           ps_->read_batch(&read_buffer, layer_handles.read_handle);
@@ -1143,32 +1084,102 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
           CHECK(!param->check_gpu_data())
               << "layer " << layer_names[layer_id] << " has gpu param";
           param->set_gpu_data(param_vals, true);
+          if (do_snapshot) {
+            /* Write the model parameter data to snapshot protobuf */
+            CHECK(!test);
+            NetParameter& net_param_pb = this->snapshot_net_param_protobuf_;
+            CHECK_LT(layer_id, net_param_pb.layer_size());
+            LayerParameter *layer_pb = net_param_pb.mutable_layer(layer_id);
+            CHECK_EQ(layer_names[layer_id], layer_pb->name());
+            CHECK_LT(param_id, layer_pb->blobs_size());
+            BlobProto *blob_pb = layer_pb->mutable_blobs(param_id);
+            bool write_diff = false;
+            param->ToProto(blob_pb, write_diff);
+          }
         }
       }
+#if defined(LOCAL_DATA_IN_PS)
+      /* Access intermediate data blobs */
+      if (print_) {
+        LOG(INFO) << "Read intermediate data blobs";
+      }
+      for (int i = 0; i < layer_info.imbs_to_access_fw.size(); i++) {
+        ImbInfo& imb_info = layer_info.imbs_to_access_fw[i];
+        CHECK_LT(i, layer_handles.imbs_to_access_fw.size());
+        int handle = layer_handles.imbs_to_access_fw[i];
+        if (print_) {
+          LOG(INFO) << "Read data " << imb_info.global_imb_id;
+        }
+        CHECK_LT(imb_info.global_imb_id, imbs.size());
+        shared_ptr<Blob<float> >& imb = imbs[imb_info.global_imb_id];
+        RowOpVal *read_buffer;
+        ps_->localaccess_batch(&read_buffer, handle);
+        CHECK(!imb->check_gpu_data())
+            << "layer " << layer_names[layer_id] << " has gpu data "
+            << imb_info.global_imb_id;
+        imb->set_gpu_data(reinterpret_cast<float *>(read_buffer), true);
+      }
+      /* Access intermediate diff blobs */
+      if (print_) {
+        LOG(INFO) << "Read intermediate diff blobs";
+      }
+      for (int i = 0; i < layer_info.imb_diffs_to_access_fw.size(); i++) {
+        ImbInfo& imb_info = layer_info.imb_diffs_to_access_fw[i];
+        CHECK_LT(i, layer_handles.imb_diffs_to_access_fw.size());
+        int handle = layer_handles.imb_diffs_to_access_fw[i];
+        if (print_) {
+          LOG(INFO) << "Read data " << imb_info.global_imb_id;
+        }
+        CHECK_LT(imb_info.global_imb_id, imbs.size());
+        shared_ptr<Blob<float> >& imb = imbs[imb_info.global_imb_id];
+        RowOpVal *read_buffer;
+        ps_->localaccess_batch(&read_buffer, handle);
+        CHECK(!imb->check_gpu_diff())
+            << "layer " << layer_names[layer_id] << " has gpu diff";
+        imb->set_gpu_diff(reinterpret_cast<float *>(read_buffer), true);
+      }
+#endif
       CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
       if (!test) {
         layer_info.fw_read_time +=
             (tbb::tick_count::now() - tick_start).seconds();
       }
 
-      // vector<int>& bottom_imb_ids = this->net_->bottom_id_vecs_[layer_id];
-      // vector<int>& top_imb_ids = this->net_->top_id_vecs_[layer_id];
-      // for (int i = 0; i < bottom_imb_ids.size(); i++) {
-        // LOG(INFO) << "Check blob #" << bottom_imb_ids[i]
-                  // << " : " << imbs[bottom_imb_ids[i]]->check_gpu_data();
-      // }
-      // for (int i = 0; i < top_imb_ids.size(); i++) {
-        // LOG(INFO) << "Check blob #" << top_imb_ids[i]
-                  // << " : " << imbs[top_imb_ids[i]]->check_gpu_data();
-      // }
+      if (print_) {
+        vector<int>& bottom_imb_ids = this->net_->bottom_id_vecs_[layer_id];
+        vector<int>& top_imb_ids = this->net_->top_id_vecs_[layer_id];
+        for (int i = 0; i < bottom_imb_ids.size(); i++) {
+          shared_ptr<Blob<float> >& imb = imbs[bottom_imb_ids[i]];
+          LOG(INFO) << "Check blob #" << bottom_imb_ids[i]
+                    << " : " << imb->check_gpu_data();
+          float blob_dot;
+          caffe_gpu_dot<float>(imb->count(), imb->gpu_data(), imb->gpu_data(), &blob_dot);
+          LOG(INFO) << "Blob #" << bottom_imb_ids[i]
+                    << ", dot = " << blob_dot;
+        }
+        for (int i = 0; i < top_imb_ids.size(); i++) {
+          LOG(INFO) << "Check blob #" << top_imb_ids[i]
+                    << " : " << imbs[top_imb_ids[i]]->check_gpu_data();
+        }
+
+        for (int param_id = 0;
+            param_id < layer_info.param_infos.size(); param_id++) {
+          shared_ptr<Blob<float> >& param = layer->blobs()[param_id];
+          float param_dot;
+          caffe_gpu_dot<float>(param->count(), param->gpu_data(), param->gpu_data(), &param_dot);
+          LOG(INFO) << "Param #" << param_id
+                    << ", dot = " << param_dot;
+        }
+      }
 
       /* Forward calculation */
-      // LOG(INFO) << "Forward calculation";
+      if (print_) {
+        LOG(INFO) << "Forward calculation";
+      }
       tick_start = tbb::tick_count::now();
       float layer_loss =
           layer->Forward(bottom_vecs[layer_id], top_vecs[layer_id]);
       CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
-      // LOG(INFO) << "layer_loss = " << layer_loss;
       loss += layer_loss;
       if (!test) {
         layer_info.fw_compute_time +=
@@ -1178,12 +1189,16 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
       tick_start = tbb::tick_count::now();
 #if defined(LOCAL_DATA_IN_PS)
       /* Release intermediate data blobs */
-      // LOG(INFO) << "Release intermediate data blobs";
+      if (print_) {
+        LOG(INFO) << "Release intermediate data blobs";
+      }
       for (int i = 0; i < layer_info.imbs_to_release_fw.size(); i++) {
         ImbInfo& imb_info = layer_info.imbs_to_release_fw[i];
         CHECK_LT(i, layer_handles.imbs_to_release_fw.size());
         int handle = layer_handles.imbs_to_release_fw[i];
-        // LOG(INFO) << "Release data " << imb_info.global_imb_id;
+        if (print_) {
+          LOG(INFO) << "Release data " << imb_info.global_imb_id;
+        }
         shared_ptr<Blob<float> >& imb = imbs[imb_info.global_imb_id];
         imb->gpu_data();
            /* Make sure everything is copied to GPU memory */
@@ -1191,12 +1206,16 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
         ps_->postlocalaccess_batch(handle);
       }
       /* Release intermediate diff blobs */
-      // LOG(INFO) << "Release intermediate diff blobs";
+      if (print_) {
+        LOG(INFO) << "Release intermediate diff blobs";
+      }
       for (int i = 0; i < layer_info.imb_diffs_to_release_fw.size(); i++) {
         ImbInfo& imb_info = layer_info.imb_diffs_to_release_fw[i];
         CHECK_LT(i, layer_handles.imb_diffs_to_release_fw.size());
         int handle = layer_handles.imb_diffs_to_release_fw[i];
-        // LOG(INFO) << "Release data " << imb_info.global_imb_id;
+        if (print_) {
+          LOG(INFO) << "Release data " << imb_info.global_imb_id;
+        }
         shared_ptr<Blob<float> >& imb = imbs[imb_info.global_imb_id];
         imb->gpu_diff();
            /* Make sure everything is copied to GPU memory */
@@ -1206,8 +1225,10 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
 #endif
       /* Release read buffers */
       if (layer_info.param_infos.size()) {
-        // LOG(INFO) << "Release read buffers: handle #"
-            // << layer_handles.postread_handle;
+        if (print_) {
+          LOG(INFO) << "Release read buffers: handle #"
+              << layer_handles.postread_handle;
+        }
         for (int param_id = 0;
             param_id < layer_info.param_infos.size(); param_id++) {
           shared_ptr<Blob<float> >& param = layer->blobs()[param_id];
@@ -1227,9 +1248,13 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
     }
 
     /* Backward */
-    // LOG(INFO) << "Backward";
+    if (print_) {
+      LOG(INFO) << "Backward";
+    }
     for (int layer_id = layer_infos_.size() - 1; layer_id >= 0; layer_id--) {
-      // LOG(INFO) << "Layer " << layer_id << ": " << layer_names[layer_id];
+      if (print_) {
+        LOG(INFO) << "Layer " << layer_id << ": " << layer_names[layer_id];
+      }
       CHECK_LT(layer_id, layers.size());
       shared_ptr<Layer<float> >& layer = layers[layer_id];
       CHECK(layer);
@@ -1240,37 +1265,11 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
       LayerHandles& layer_handles = layer_info.layer_handles[batch_id];
 
       tick_start = tbb::tick_count::now();
-#if defined(LOCAL_DATA_IN_PS)
-      /* Access intermediate data blobs */
-      for (int i = 0; i < layer_info.imbs_to_access_bw.size(); i++) {
-        ImbInfo& imb_info = layer_info.imbs_to_access_bw[i];
-        CHECK_LT(i, layer_handles.imbs_to_access_bw.size());
-        int handle = layer_handles.imbs_to_access_bw[i];
-        // LOG(INFO) << "Read data " << imb_info.global_imb_id;
-        shared_ptr<Blob<float> >& imb = imbs[imb_info.global_imb_id];
-        RowOpVal *imb_buffer;
-        ps_->localaccess_batch(&imb_buffer, handle);
-        CHECK(!imb->check_gpu_data())
-            << "layer " << layer_names[layer_id] << " has gpu data";
-        imb->set_gpu_data(reinterpret_cast<float *>(imb_buffer), true);
-      }
-      /* Access intermediate diff blobs */
-      for (int i = 0; i < layer_info.imb_diffs_to_access_bw.size(); i++) {
-        ImbInfo& imb_info = layer_info.imb_diffs_to_access_bw[i];
-        CHECK_LT(i, layer_handles.imb_diffs_to_access_bw.size());
-        int handle = layer_handles.imb_diffs_to_access_bw[i];
-        // LOG(INFO) << "Read diff " << imb_info.global_imb_id;
-        shared_ptr<Blob<float> >& imb = imbs[imb_info.global_imb_id];
-        RowOpVal *imb_buffer;
-        ps_->localaccess_batch(&imb_buffer, handle);
-        CHECK(!imb->check_gpu_diff())
-            << "layer " << layer_names[layer_id] << " has gpu diff";
-        imb->set_gpu_diff(reinterpret_cast<float *>(imb_buffer), true);
-      }
-#endif
       if (layer_info.param_infos.size()) {
         /* Prepare write buffers */
-        // LOG(INFO) << "Prepare write buffers";
+        if (print_) {
+          LOG(INFO) << "Prepare write buffers";
+        }
         CHECK(!layer_info.local_param);
         RowOpVal *write_buffer;
         ps_->preinc_batch(&write_buffer, layer_handles.prewrite_handle);
@@ -1288,7 +1287,9 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
           /* "true" means that we don't keep CPU data */
         }
         /* Read params */
-        // LOG(INFO) << "Read params";
+        if (print_) {
+          LOG(INFO) << "Read params";
+        }
         RowOpVal *read_buffer;
         ps_->read_batch(&read_buffer, layer_handles.bw_read_handle);
         float *read_params_vals = reinterpret_cast<float *>(read_buffer);
@@ -1310,18 +1311,114 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
           float *history_param_vals = &history_vals[param_val_offset];
           int global_param_id =
               layer_info.param_infos[param_id].global_param_id;
-          history_[global_param_id]->set_gpu_data(history_param_vals, true);
+          shared_ptr<Blob<float> >& updates_history = history_[global_param_id];
+          updates_history->set_gpu_data(history_param_vals, true);
+          // if (!test) {
+            // float history_dot;
+            // caffe_gpu_dot<float>(updates_history->count(), updates_history->gpu_data(), updates_history->gpu_data(), &history_dot);
+            // LOG(INFO) << "history_dot #" << global_param_id << " is " << history_dot;
+          // }
+          if (do_snapshot) {
+            /* Write the updates history data to solver state protobuf */
+            CHECK(!test);
+            SolverState& solverstate_pb = this->snapshot_solver_state_protobuf_;
+            CHECK_LT(global_param_id, solverstate_pb.history_size());
+            BlobProto *history_pb =
+                solverstate_pb.mutable_history(global_param_id);
+            bool write_diff = false;
+            updates_history->ToProto(history_pb, write_diff);
+          }
         }
       }
+#if defined(LOCAL_DATA_IN_PS)
+      /* Access intermediate data blobs */
+      if (print_) {
+        LOG(INFO) << "Access intermediate data blobs";
+      }
+      for (int i = 0; i < layer_info.imbs_to_access_bw.size(); i++) {
+        ImbInfo& imb_info = layer_info.imbs_to_access_bw[i];
+        CHECK_LT(i, layer_handles.imbs_to_access_bw.size());
+        int handle = layer_handles.imbs_to_access_bw[i];
+        if (print_) {
+          LOG(INFO) << "Read data " << imb_info.global_imb_id;
+        }
+        shared_ptr<Blob<float> >& imb = imbs[imb_info.global_imb_id];
+        RowOpVal *imb_buffer;
+        ps_->localaccess_batch(&imb_buffer, handle);
+        CHECK(!imb->check_gpu_data())
+            << "layer " << layer_names[layer_id] << " has gpu data";
+        imb->set_gpu_data(reinterpret_cast<float *>(imb_buffer), true);
+      }
+      /* Access intermediate diff blobs */
+      if (print_) {
+        LOG(INFO) << "Access intermediate diff blobs";
+      }
+      for (int i = 0; i < layer_info.imb_diffs_to_access_bw.size(); i++) {
+        ImbInfo& imb_info = layer_info.imb_diffs_to_access_bw[i];
+        CHECK_LT(i, layer_handles.imb_diffs_to_access_bw.size());
+        int handle = layer_handles.imb_diffs_to_access_bw[i];
+        if (print_) {
+          LOG(INFO) << "Read diff " << imb_info.global_imb_id;
+        }
+        shared_ptr<Blob<float> >& imb = imbs[imb_info.global_imb_id];
+        RowOpVal *imb_buffer;
+        ps_->localaccess_batch(&imb_buffer, handle);
+        CHECK(!imb->check_gpu_diff())
+            << "layer " << layer_names[layer_id] << " has gpu diff";
+        imb->set_gpu_diff(reinterpret_cast<float *>(imb_buffer), true);
+      }
+#endif
       CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
       if (!test) {
         layer_info.bw_read_time +=
             (tbb::tick_count::now() - tick_start).seconds();
       }
 
+      if (print_) {
+        vector<int>& bottom_imb_ids = this->net_->bottom_id_vecs_[layer_id];
+        vector<int>& top_imb_ids = this->net_->top_id_vecs_[layer_id];
+        for (int i = 0; i < bottom_imb_ids.size(); i++) {
+          shared_ptr<Blob<float> >& imb = imbs[bottom_imb_ids[i]];
+          LOG(INFO) << "Check blob #" << bottom_imb_ids[i]
+                    << " : " << imb->check_gpu_data();
+          float blob_dot;
+          caffe_gpu_dot<float>(imb->count(), imb->gpu_data(), imb->gpu_data(), &blob_dot);
+          LOG(INFO) << "Blob #" << bottom_imb_ids[i]
+                    << ", dot = " << blob_dot;
+        }
+        for (int i = 0; i < top_imb_ids.size(); i++) {
+          if (layer_types[layer_id] == "Data" ||
+              (layer_types[layer_id] == "LRN" && i > 0) ||
+              (layer_types[layer_id] == "Pooling" && i > 0) ||
+              (layer_types[layer_id] == "Dropout" && i > 0)) {
+            /* Do not use top diff blobs */
+            continue;
+          }
+          shared_ptr<Blob<float> >& imb = imbs[top_imb_ids[i]];
+          LOG(INFO) << "Check blob diff #" << top_imb_ids[i]
+                    << " : " << imbs[top_imb_ids[i]]->check_gpu_diff();
+          float blob_dot;
+          caffe_gpu_dot<float>(imb->count(), imb->gpu_diff(), imb->gpu_diff(), &blob_dot);
+          LOG(INFO) << "Blob #" << top_imb_ids[i]
+                    << ", count = " << imb->count()
+                    << ", diff dot = " << blob_dot;
+        }
+
+        for (int param_id = 0;
+            param_id < layer_info.param_infos.size(); param_id++) {
+          shared_ptr<Blob<float> >& param = layer->blobs()[param_id];
+          float param_dot;
+          caffe_gpu_dot<float>(param->count(), param->gpu_data(), param->gpu_data(), &param_dot);
+          LOG(INFO) << "Param #" << param_id
+                    << ", dot = " << param_dot;
+        }
+      }
+
       if (!test) {
         /* Backward calculation */
-        // LOG(INFO) << "Backward calculation";
+        if (print_) {
+          LOG(INFO) << "Backward calculation";
+        }
         tick_start = tbb::tick_count::now();
         layer->Backward(top_vecs[layer_id], layer_info.bottom_need_backward,
             bottom_vecs[layer_id]);
@@ -1333,12 +1430,16 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
       tick_start = tbb::tick_count::now();
 #if defined(LOCAL_DATA_IN_PS)
       /* Release intermediate data blobs */
-      // LOG(INFO) << "Release intermediate data blobs";
+      if (print_) {
+        LOG(INFO) << "Release intermediate data blobs";
+      }
       for (int i = 0; i < layer_info.imbs_to_release_bw.size(); i++) {
         ImbInfo& imb_info = layer_info.imbs_to_release_bw[i];
         CHECK_LT(i, layer_handles.imbs_to_release_bw.size());
         int handle = layer_handles.imbs_to_release_bw[i];
-        // LOG(INFO) << "Release data " << imb_info.global_imb_id;
+        if (print_) {
+          LOG(INFO) << "Release data " << imb_info.global_imb_id;
+        }
         shared_ptr<Blob<float> >& imb = imbs[imb_info.global_imb_id];
         imb->gpu_data();
           /* Make sure everything is copied to GPU memory */
@@ -1346,12 +1447,16 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
         ps_->postlocalaccess_batch(handle);
       }
       /* Release intermediate diff blobs */
-      // LOG(INFO) << "Release intermediate diff blobs";
+      if (print_) {
+        LOG(INFO) << "Release intermediate diff blobs";
+      }
       for (int i = 0; i < layer_info.imb_diffs_to_release_bw.size(); i++) {
         ImbInfo& imb_info = layer_info.imb_diffs_to_release_bw[i];
         CHECK_LT(i, layer_handles.imb_diffs_to_release_bw.size());
         int handle = layer_handles.imb_diffs_to_release_bw[i];
-        // LOG(INFO) << "Release diff " << imb_info.global_imb_id;
+        if (print_) {
+          LOG(INFO) << "Release diff " << imb_info.global_imb_id;
+        }
         shared_ptr<Blob<float> >& imb = imbs[imb_info.global_imb_id];
         imb->gpu_diff();
           /* Make sure everything is copied to GPU memory */
@@ -1383,6 +1488,11 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
           }
           shared_ptr<Blob<float> >& param = layer->blobs()[param_id];
           param->gpu_diff();
+          if (print_) {
+            float param_dot;
+            caffe_gpu_dot<float>(param->count(), param->gpu_diff(), param->gpu_diff(), &param_dot);
+            LOG(INFO) << "Param #" << global_param_id << ", diff dot = " << param_dot;
+          }
             /* Make sure everything is copied to GPU memory */
           param->set_gpu_diff(NULL, true);
         }
@@ -1395,7 +1505,9 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
         /* Apply updates to PS */
         ps_->inc_batch(layer_handles.write_handle);
         /* Release read buffers */
-        // LOG(INFO) << "Release read buffers";
+        if (print_) {
+          LOG(INFO) << "Release read buffers";
+        }
         for (int param_id = 0;
             param_id < layer_info.param_infos.size(); param_id++) {
           shared_ptr<Blob<float> >& param = layer->blobs()[param_id];
@@ -1425,20 +1537,47 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
   return loss;
 }
 
+template <typename Dtype>
+void Solver<Dtype>::InitSnapshot() {
+  InitNetParameterSnapshot();
+  InitSolverStateSnapshot();
+}
+
+template <typename Dtype>
+void Solver<Dtype>::InitNetParameterSnapshot() {
+  /* Init snapshot protobuf for model parameters.
+   * We will keep using this protobuf structure in future snapshots. */
+  /* I just call the Net::ToProto() function,
+   * though we actually don't need the Net::ToProto() function to
+   * write blob data in this template protobuf. */
+  bool write_diff = false;
+  this->net_->ToProto(&snapshot_net_param_protobuf_, write_diff);
+}
+
+template <typename Dtype>
+void SGDSolver<Dtype>::InitSolverStateSnapshot() {
+  /* Init snapshot protobuf for solver states.
+   * We will keep using this protobuf structure in future snapshots. */
+  this->snapshot_solver_state_protobuf_.clear_history();
+  for (int i = 0; i < history_.size(); ++i) {
+    this->snapshot_solver_state_protobuf_.add_history();
+  }
+}
+
 template <>
 void Solver<double>::InitPs() {
   CHECK(0);
 }
 
 template <>
-void Solver<double>::SetPsParamValues() {
+void SGDSolver<double>::InitPsValues() {
   CHECK(0);
 }
 
 template <>
 double SGDSolver<double>::ForwardBackwardUsingPs(
     const vector<Blob<double>* > & bottom,
-    const shared_ptr<Net<double> >& net, bool test) {
+    const shared_ptr<Net<double> >& net, bool test, bool do_snapshot) {
   CHECK(0);
   return 0;
 }
@@ -1452,29 +1591,65 @@ void Solver<Dtype>::Step(int iters) {
   vector<Dtype> losses;
   Dtype smoothed_loss = 0;
 
-  SetPsParamValues();
+  InitPsValues();
+  InitSnapshot();
 
-  double read_ps_time = 0.0;
-  double compute_time = 0.0;
-  double adjust_update_time = 0.0;
-  double update_ps_time = 0.0;
   tbb::tick_count tick_start = tbb::tick_count::now();
 
-  while (iter_ < stop_iter) {
-    if (param_.test_interval() && iter_ % param_.test_interval() == 0
-        && (iter_ > 0 || param_.test_initialization())) {
-      TestAll();
+  while (iter_ < (stop_iter + 1)) {
+    /* We iterate iter_ to (stop_iter + 1),
+     * because we need one more iteration to do testing and snapshotting. */
+    const bool do_test =
+        param_.test_interval() && iter_ % param_.test_interval() == 0
+            && (iter_ > 0 || param_.test_initialization());
+    const bool display = param_.display() && iter_ % param_.display() == 0;
+    const bool do_snapshot = iter_ != start_iter
+        && param_.snapshot() && iter_ % param_.snapshot() == 0;
+    const bool print_ps_info = iter_ != start_iter
+        && (iter_ % 1000 == 0 || iter_ == stop_iter);
+
+    if (print_ps_info) {
+      double training_time = (tbb::tick_count::now() - tick_start).seconds();
+      double read_time = 0;
+      double write_time = 0;
+      double compute_time = 0;
+      for (int i = 0; i < layer_infos_.size(); i++) {
+        read_time += layer_infos_[i].fw_read_time;
+        read_time += layer_infos_[i].bw_read_time;
+        write_time += layer_infos_[i].fw_write_time;
+        write_time += layer_infos_[i].bw_write_time;
+        compute_time += layer_infos_[i].fw_compute_time;
+        compute_time += layer_infos_[i].bw_compute_time;
+      }
+      LOG(INFO) << "Read PS time: " << read_time;
+      LOG(INFO) << "Write PS time: " << write_time;
+      LOG(INFO) << "Compute time: " << compute_time;
+      // LOG(INFO) << "Compute time: " << training_time - read_time;
+      LOG(INFO) << "Training time: " << training_time;
+      // LOG(INFO) << "Per layer forwardbackward times:";
+      // for (int i = 0; i < layer_infos_.size(); i++) {
+        // cerr << i << "," << layer_infos_[i].fw_read_time
+             // << "," << layer_infos_[i].fw_compute_time
+             // << "," << layer_infos_[i].fw_write_time
+             // << endl;
+      // }
+      // for (int i = layer_infos_.size() - 1; i >= 0; i--) {
+        // cerr << i << "," << layer_infos_[i].bw_read_time
+             // << "," << layer_infos_[i].bw_compute_time
+             // << "," << layer_infos_[i].bw_write_time
+             // << endl;
+      // }
     }
 
-    const bool display = param_.display() && iter_ % param_.display() == 0;
-    net_->set_debug_info(display && param_.debug_info());
+    if (do_test) {
+      TestAll();
+    }
     // accumulate the loss and gradient
-    tbb::tick_count compute_start = tbb::tick_count::now();
     Dtype loss = 0;
     CHECK_EQ(param_.iter_size(), 1);
-    loss = ForwardBackwardUsingPs(bottom_vec, this->net_, /* train */ false);
+    bool test = false;
+    loss = ForwardBackwardUsingPs(bottom_vec, this->net_, test, do_snapshot);
     CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
-    compute_time += (tbb::tick_count::now() - compute_start).seconds();
     // average the loss across iterations for smoothed reporting
     if (losses.size() < average_loss) {
       losses.push_back(loss);
@@ -1509,47 +1684,14 @@ void Solver<Dtype>::Step(int iters) {
       }
     }
 
-    // Increment the internal iter_ counter -- its value should always indicate
-    // the number of times the weights have been updated.
-    ++iter_;
-
-    // Save a snapshot if needed.
-    if (param_.snapshot() && iter_ % param_.snapshot() == 0) {
+    /* Write snapshot files */
+    if (do_snapshot) {
       Snapshot();
     }
 
-    if (iter_ % 1000 == 0 || iter_ == stop_iter) {
-      double training_time = (tbb::tick_count::now() - tick_start).seconds();
-      double read_time = 0;
-      double write_time = 0;
-      double compute_time = 0;
-      for (int i = 0; i < layer_infos_.size(); i++) {
-        read_time += layer_infos_[i].fw_read_time;
-        read_time += layer_infos_[i].bw_read_time;
-        write_time += layer_infos_[i].fw_write_time;
-        write_time += layer_infos_[i].bw_write_time;
-        compute_time += layer_infos_[i].fw_compute_time;
-        compute_time += layer_infos_[i].bw_compute_time;
-      }
-      LOG(INFO) << "Read PS time: " << read_time;
-      LOG(INFO) << "Write PS time: " << write_time;
-      LOG(INFO) << "Compute time: " << compute_time;
-      // LOG(INFO) << "Compute time: " << training_time - read_time;
-      LOG(INFO) << "Training time: " << training_time;
-      // LOG(INFO) << "Per layer forwardbackward times:";
-      // for (int i = 0; i < layer_infos_.size(); i++) {
-        // cerr << i << "," << layer_infos_[i].fw_read_time
-             // << "," << layer_infos_[i].fw_compute_time
-             // << "," << layer_infos_[i].fw_write_time
-             // << endl;
-      // }
-      // for (int i = layer_infos_.size() - 1; i >= 0; i--) {
-        // cerr << i << "," << layer_infos_[i].bw_read_time
-             // << "," << layer_infos_[i].bw_compute_time
-             // << "," << layer_infos_[i].bw_write_time
-             // << endl;
-      // }
-    }
+    // Increment the internal iter_ counter -- its value should always indicate
+    // the number of times the weights have been updated.
+    ++iter_;
   }
   if (!ps_config_.no_ps) {
     string json_stats = ps_->json_stats();
@@ -1614,8 +1756,10 @@ void Solver<Dtype>::Test(const int test_net_id) {
   const shared_ptr<Net<Dtype> >& test_net = test_nets_[test_net_id];
   Dtype loss = 0;
   for (int i = 0; i < param_.test_iter(test_net_id); ++i) {
+    bool test = true;
+    bool do_snapshot = false;
     Dtype iter_loss =
-        ForwardBackwardUsingPs(bottom_vec, test_net, /* test */ true);
+        ForwardBackwardUsingPs(bottom_vec, test_net, test, do_snapshot);
     const vector<Blob<Dtype>*>& result = test_net->net_output_blobs_;
     if (param_.test_compute_loss()) {
       loss += iter_loss;
@@ -1658,39 +1802,44 @@ void Solver<Dtype>::Test(const int test_net_id) {
   }
 }
 
-
 template <typename Dtype>
 void Solver<Dtype>::Snapshot() {
-  NetParameter net_param;
-  // For intermediate results, we will also dump the gradient values.
-  CHECK(!param_.snapshot_diff());   // Cui's check
-  net_->ToProto(&net_param, param_.snapshot_diff());
   string filename(param_.snapshot_prefix());
   string model_filename, snapshot_filename;
   const int kBufferSize = 20;
   char iter_str_buffer[kBufferSize];
   snprintf(iter_str_buffer, kBufferSize, "_iter_%d", iter_);
   filename += iter_str_buffer;
-  model_filename = filename + ".caffemodel";
-  LOG(INFO) << "Snapshotting to " << model_filename;
-  WriteProtoToBinaryFile(net_param, model_filename.c_str());
-  SolverState state;
-  SnapshotSolverState(&state);
+  /* Snapshot model parameters */
+  NetParameter& net_param = snapshot_net_param_protobuf_;
+  model_filename = (boost::format("%s.caffemodel") % filename).str();
+  if (ps_config_.worker_id == 0) {
+    /* Only worker-0 snapshots model, because we assume we will only do BSP */
+    LOG(INFO) << "Snapshotting model to " << model_filename;
+    WriteProtoToBinaryFile(net_param, model_filename.c_str());
+  }
+  /* Snapshot solver states */
+  SolverState& state = snapshot_solver_state_protobuf_;
   state.set_iter(iter_);
   state.set_learned_net(model_filename);
   state.set_current_step(current_step_);
-  snapshot_filename = filename + ".solverstate";
+  snapshot_filename = (boost::format("%s.solverstate.%i")
+      % filename % ps_config_.worker_id).str();
   LOG(INFO) << "Snapshotting solver state to " << snapshot_filename;
   WriteProtoToBinaryFile(state, snapshot_filename.c_str());
 }
 
 template <typename Dtype>
-void Solver<Dtype>::Restore(const char* state_file) {
+void Solver<Dtype>::Restore(const char* snapshot_name) {
   SolverState state;
   NetParameter net_param;
-  ReadProtoFromBinaryFile(state_file, &state);
+  string state_filename = (boost::format("%s.solverstate.%i")
+      % snapshot_name % ps_config_.worker_id).str();
+  ReadProtoFromBinaryFile(state_filename, &state);
   if (state.has_learned_net()) {
-    ReadNetParamsFromBinaryFileOrDie(state.learned_net().c_str(), &net_param);
+    string model_filename = (boost::format("%s.caffemodel")
+        % snapshot_name).str();
+    ReadNetParamsFromBinaryFileOrDie(model_filename.c_str(), &net_param);
     net_->CopyTrainedLayersFrom(net_param);
   }
   iter_ = state.iter();

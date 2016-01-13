@@ -168,8 +168,12 @@ void PoolingLayer<Dtype>::Forward_gpu(const vector<Blob<Dtype>*>& bottom,
   switch (this->layer_param_.pooling_param().pool()) {
   case PoolingParameter_PoolMethod_MAX:
     if (use_top_mask) {
+      CHECK(top[1]->check_gpu_data());
       top_mask = top[1]->mutable_gpu_data();
     } else {
+      if (!max_idx_.check_gpu_data()) {
+        LOG(INFO) << "***WARNING: unmanaged intermediate data in PoolingLayer!";
+      }
       mask = max_idx_.mutable_gpu_data();
     }
     // NOLINT_NEXT_LINE(whitespace/operators)
@@ -189,6 +193,7 @@ void PoolingLayer<Dtype>::Forward_gpu(const vector<Blob<Dtype>*>& bottom,
   case PoolingParameter_PoolMethod_STOCHASTIC:
     if (this->phase_ == TRAIN) {
       // We need to create the random index as well.
+      CHECK(rand_idx_.check_gpu_data());
       caffe_gpu_rng_uniform(count, Dtype(0), Dtype(1),
                             rand_idx_.mutable_gpu_data());
       // NOLINT_NEXT_LINE(whitespace/operators)
@@ -348,9 +353,10 @@ void PoolingLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top,
   switch (this->layer_param_.pooling_param().pool()) {
   case PoolingParameter_PoolMethod_MAX:
     if (use_top_mask) {
-      CHECK(0);
+      CHECK(top[1]->check_gpu_data());
       top_mask = top[1]->gpu_data();
     } else {
+      CHECK(max_idx_.check_gpu_data());
       mask = max_idx_.gpu_data();
     }
     // NOLINT_NEXT_LINE(whitespace/operators)

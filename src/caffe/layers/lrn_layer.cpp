@@ -78,7 +78,7 @@ void LRNLayer<Dtype>::Reshape(const vector<Blob<Dtype>*>& bottom,
   switch (this->layer_param_.lrn_param().norm_region()) {
   case LRNParameter_NormRegion_ACROSS_CHANNELS:
     top[0]->Reshape(num_, channels_, height_, width_);
-    scale_.Reshape(num_, channels_, height_, width_);
+    top[1]->Reshape(num_, channels_, height_, width_);
     break;
   case LRNParameter_NormRegion_WITHIN_CHANNEL:
     split_layer_->Reshape(bottom, split_top_vec_);
@@ -110,9 +110,9 @@ void LRNLayer<Dtype>::CrossChannelForward_cpu(
     const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top) {
   const Dtype* bottom_data = bottom[0]->cpu_data();
   Dtype* top_data = top[0]->mutable_cpu_data();
-  Dtype* scale_data = scale_.mutable_cpu_data();
+  Dtype* scale_data = top[1]->mutable_cpu_data();
   // start with the constant value
-  for (int i = 0; i < scale_.count(); ++i) {
+  for (int i = 0; i < top[1]->count(); ++i) {
     scale_data[i] = k_;
   }
   Blob<Dtype> padded_square(1, channels_ + size_ - 1, height_, width_);
@@ -129,27 +129,27 @@ void LRNLayer<Dtype>::CrossChannelForward_cpu(
     for (int c = 0; c < size_; ++c) {
       caffe_axpy<Dtype>(height_ * width_, alpha_over_size,
           padded_square_data + padded_square.offset(0, c),
-          scale_data + scale_.offset(n, 0));
+          scale_data + top[1]->offset(n, 0));
     }
     for (int c = 1; c < channels_; ++c) {
       // copy previous scale
       caffe_copy<Dtype>(height_ * width_,
-          scale_data + scale_.offset(n, c - 1),
-          scale_data + scale_.offset(n, c));
+          scale_data + top[1]->offset(n, c - 1),
+          scale_data + top[1]->offset(n, c));
       // add head
       caffe_axpy<Dtype>(height_ * width_, alpha_over_size,
           padded_square_data + padded_square.offset(0, c + size_ - 1),
-          scale_data + scale_.offset(n, c));
+          scale_data + top[1]->offset(n, c));
       // subtract tail
       caffe_axpy<Dtype>(height_ * width_, -alpha_over_size,
           padded_square_data + padded_square.offset(0, c - 1),
-          scale_data + scale_.offset(n, c));
+          scale_data + top[1]->offset(n, c));
     }
   }
 
   // In the end, compute output
-  caffe_powx<Dtype>(scale_.count(), scale_data, -beta_, top_data);
-  caffe_mul<Dtype>(scale_.count(), top_data, bottom_data, top_data);
+  caffe_powx<Dtype>(top[1]->count(), scale_data, -beta_, top_data);
+  caffe_mul<Dtype>(top[1]->count(), top_data, bottom_data, top_data);
 }
 
 template <typename Dtype>
@@ -184,7 +184,7 @@ void LRNLayer<Dtype>::CrossChannelBackward_cpu(
   const Dtype* top_diff = top[0]->cpu_diff();
   const Dtype* top_data = top[0]->cpu_data();
   const Dtype* bottom_data = bottom[0]->cpu_data();
-  const Dtype* scale_data = scale_.cpu_data();
+  const Dtype* scale_data = top[1]->cpu_data();
   Dtype* bottom_diff = bottom[0]->mutable_cpu_diff();
   Blob<Dtype> padded_ratio(1, channels_ + size_ - 1, height_, width_);
   Blob<Dtype> accum_ratio(1, 1, height_, width_);
@@ -195,13 +195,13 @@ void LRNLayer<Dtype>::CrossChannelBackward_cpu(
   caffe_set(padded_ratio.count(), Dtype(0), padded_ratio_data);
   Dtype cache_ratio_value = 2. * alpha_ * beta_ / size_;
 
-  caffe_powx<Dtype>(scale_.count(), scale_data, -beta_, bottom_diff);
-  caffe_mul<Dtype>(scale_.count(), top_diff, bottom_diff, bottom_diff);
+  caffe_powx<Dtype>(top[1]->count(), scale_data, -beta_, bottom_diff);
+  caffe_mul<Dtype>(top[1]->count(), top_diff, bottom_diff, bottom_diff);
 
   // go through individual data
   int inverse_pre_pad = size_ - (size_ + 1) / 2;
   for (int n = 0; n < num_; ++n) {
-    int block_offset = scale_.offset(n);
+    int block_offset = top[1]->offset(n);
     // first, compute diff_i * y_i / s_i
     caffe_mul<Dtype>(channels_ * height_ * width_,
         top_diff + block_offset, top_data + block_offset,

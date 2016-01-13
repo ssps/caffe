@@ -39,8 +39,8 @@ void Net<Dtype>::Init(const NetParameter& in_param) {
   // the current NetState.
   NetParameter filtered_param;
   FilterNet(in_param, &filtered_param);
-  // LOG(INFO) << "Initializing net from parameters: " << std::endl
-            // << filtered_param.DebugString();
+  LOG(INFO) << "Initializing net from parameters: " << std::endl
+            << filtered_param.DebugString();
   // Create a copy of filtered_param with splits added where necessary.
   NetParameter param;
   InsertSplits(filtered_param, &param);
@@ -99,11 +99,19 @@ void Net<Dtype>::Init(const NetParameter& in_param) {
       // If a blob needs backward, this layer should provide it.
       need_backward |= blob_need_backward_[blob_id];
     }
-    const int num_loss_weights = layer_param.loss_weight_size();
-    // LOG(INFO) << "layer_id = " << layer_id << ", num_loss_weights = " << num_loss_weights;
     int num_top = layer_param.top_size();
     for (int top_id = 0; top_id < num_top; ++top_id) {
-      AppendTop(param, layer_id, top_id, &available_blobs, &blob_name_to_idx);
+      if ((layer_param.type() == "LRN" && top_id > 0)
+          || (layer_param.type() == "Pooling" && top_id > 0)
+          || (layer_param.type() == "Dropout" && top_id > 0)) {
+        /* top[1] of the LRN layer is used as the intermediate scale_ data;
+         * top[1] of the Pooling layer is used as the intermediate mask_ data;
+         * top[1] of the Pooling layer is used as intermediate data;
+         * So we don't add them to available_blobs */
+        AppendTop(param, layer_id, top_id, NULL, &blob_name_to_idx);
+      } else {
+        AppendTop(param, layer_id, top_id, &available_blobs, &blob_name_to_idx);
+      }
     }
     // If the layer specifies that AutoTopBlobs() -> true and the LayerParameter
     // specified fewer than the required number (as specified by
@@ -435,6 +443,7 @@ void Net<Dtype>::AppendParam(const NetParameter& param, const int layer_id,
   const int param_size = layer_param.param_size();
   string param_name =
       (param_size > param_id) ? layer_param.param(param_id).name() : "";
+  LOG(INFO) << "param_name = " << param_name;
   if (param_name.size()) {
     param_display_names_.push_back(param_name);
   } else {

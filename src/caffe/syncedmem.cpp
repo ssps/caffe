@@ -51,7 +51,7 @@ inline void SyncedMemory::to_gpu() {
   switch (head_) {
   case UNINITIALIZED:
     if (gpu_ptr_ == NULL) {
-      LOG(INFO) << "Allocate GPU data for " << this << " with size " << size_;
+      LOG(INFO) << "Allocate GPU data for UNINITIALIZED with size " << size_;
       CUDA_CHECK(cudaMalloc(&gpu_ptr_, size_));
       caffe_gpu_memset(size_, 0, gpu_ptr_);
       own_gpu_data_ = true;
@@ -60,7 +60,7 @@ inline void SyncedMemory::to_gpu() {
     break;
   case HEAD_AT_CPU:
     if (gpu_ptr_ == NULL) {
-      LOG(INFO) << "Allocate GPU data for " << this << " with size " << size_;
+      LOG(INFO) << "Allocate GPU data for HEAD_AT_CPU with size " << size_;
       CUDA_CHECK(cudaMalloc(&gpu_ptr_, size_));
       own_gpu_data_ = true;
     }
@@ -117,7 +117,7 @@ void SyncedMemory::set_gpu_data(void* data, bool change_head) {
   if (change_head) {
     // CHECK_NE(head_, HEAD_AT_CPU);
     if (head_ == HEAD_AT_CPU) {
-      LOG(INFO) << "WARNING: HEAD_AT_CPU!!!";
+      // LOG(INFO) << "WARNING: HEAD_AT_CPU!!!";
     }
     if (data != NULL) {
       head_ = HEAD_AT_GPU;

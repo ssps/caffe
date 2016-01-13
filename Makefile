@@ -170,7 +170,7 @@ ifneq ($(CPU_ONLY), 1)
 	LIBRARIES := cudart cublas curand
 endif
 LIBRARIES += glog gflags protobuf leveldb snappy \
-	lmdb boost_system hdf5_hl hdf5 m \
+	lmdb boost_system boost_chrono hdf5_hl hdf5 m \
 	opencv_core opencv_highgui opencv_imgproc
 PYTHON_LIBRARIES := boost_python python2.7
 WARNINGS := -Wall -Wno-sign-compare
@@ -349,11 +349,6 @@ LIBRARIES += lazytablemodule_shared
 # LIBRARIES += lazytablemodule
 LIBRARY_DIRS += ../../flat-map
 INCLUDE_DIRS += ../../lazy-table-module/include
-# TODO: shall not use absolute path here
-# LIBRARY_DIRS += /tank/projects/biglearning/hengganc/install-ubuntu14/cudnn-6.5-linux-x64-v2
-# INCLUDE_DIRS += /tank/projects/biglearning/hengganc/install-ubuntu14/cudnn-6.5-linux-x64-v2
-LDFLAGS += -Wl,-rpath,/tank/projects/biglearning/hengganc/LazyTable/flat-map
-LDFLAGS += -Wl,-rpath,/tank/projects/biglearning/hengganc/cudnn-6.5-linux-x64-v2
 
 # Automatic dependency generation (nvcc is handled separately)
 CXXFLAGS += -MMD -MP
@@ -459,7 +454,8 @@ $(PY$(PROJECT)_SO): $(PY$(PROJECT)_SRC) $(PY$(PROJECT)_HXX) | $(DYNAMIC_NAME)
 	@ echo CXX/LD -o $@ $<
 	$(Q)$(CXX) -shared -o $@ $(PY$(PROJECT)_SRC) \
 		-o $@ $(LINKFLAGS) -l$(PROJECT) $(PYTHON_LDFLAGS) \
-		-Wl,-rpath,$(ORIGIN)/../../build/lib
+		-Wl,-rpath,$(ORIGIN)/../../build/lib \
+		-Wl,-rpath,$(ORIGIN)/../../../../flat-map
 
 mat$(PROJECT): mat
 
@@ -553,19 +549,22 @@ $(TEST_ALL_BIN): $(TEST_MAIN_SRC) $(TEST_OBJS) $(GTEST_OBJ) \
 		| $(DYNAMIC_NAME) $(TEST_BIN_DIR)
 	@ echo CXX/LD -o $@ $<
 	$(Q)$(CXX) $(TEST_MAIN_SRC) $(TEST_OBJS) $(GTEST_OBJ) \
-		-o $@ $(LINKFLAGS) $(LDFLAGS) -l$(PROJECT) -Wl,-rpath,$(ORIGIN)/../lib
+		-o $@ $(LINKFLAGS) $(LDFLAGS) -l$(PROJECT) -Wl,-rpath,$(ORIGIN)/../lib \
+		-Wl,-rpath,$(ORIGIN)/../../../../flat-map
 
 $(TEST_CU_BINS): $(TEST_BIN_DIR)/%.testbin: $(TEST_CU_BUILD_DIR)/%.o \
 	$(GTEST_OBJ) | $(DYNAMIC_NAME) $(TEST_BIN_DIR)
 	@ echo LD $<
 	$(Q)$(CXX) $(TEST_MAIN_SRC) $< $(GTEST_OBJ) \
-		-o $@ $(LINKFLAGS) $(LDFLAGS) -l$(PROJECT) -Wl,-rpath,$(ORIGIN)/../lib
+		-o $@ $(LINKFLAGS) $(LDFLAGS) -l$(PROJECT) -Wl,-rpath,$(ORIGIN)/../lib \
+		-Wl,-rpath,$(ORIGIN)/../../../../flat-map
 
 $(TEST_CXX_BINS): $(TEST_BIN_DIR)/%.testbin: $(TEST_CXX_BUILD_DIR)/%.o \
 	$(GTEST_OBJ) | $(DYNAMIC_NAME) $(TEST_BIN_DIR)
 	@ echo LD $<
 	$(Q)$(CXX) $(TEST_MAIN_SRC) $< $(GTEST_OBJ) \
-		-o $@ $(LINKFLAGS) $(LDFLAGS) -l$(PROJECT) -Wl,-rpath,$(ORIGIN)/../lib
+		-o $@ $(LINKFLAGS) $(LDFLAGS) -l$(PROJECT) -Wl,-rpath,$(ORIGIN)/../lib \
+		-Wl,-rpath,$(ORIGIN)/../../../../flat-map
 
 # Target for extension-less symlinks to tool binaries with extension '*.bin'.
 $(TOOL_BUILD_DIR)/%: $(TOOL_BUILD_DIR)/%.bin | $(TOOL_BUILD_DIR)
@@ -575,12 +574,14 @@ $(TOOL_BUILD_DIR)/%: $(TOOL_BUILD_DIR)/%.bin | $(TOOL_BUILD_DIR)
 $(TOOL_BINS): %.bin : %.o | $(DYNAMIC_NAME)
 	@ echo CXX/LD -o $@
 	$(Q)$(CXX) $< -o $@ $(LINKFLAGS) -l$(PROJECT) $(LDFLAGS) \
-		-Wl,-rpath,$(ORIGIN)/../lib
+		-Wl,-rpath,$(ORIGIN)/../lib \
+		-Wl,-rpath,$(ORIGIN)/../../../../flat-map
 
 $(EXAMPLE_BINS): %.bin : %.o | $(DYNAMIC_NAME)
 	@ echo CXX/LD -o $@
 	$(Q)$(CXX) $< -o $@ $(LINKFLAGS) -l$(PROJECT) $(LDFLAGS) \
-		-Wl,-rpath,$(ORIGIN)/../../lib
+		-Wl,-rpath,$(ORIGIN)/../../lib \
+		-Wl,-rpath,$(ORIGIN)/../../../../../flat-map
 
 proto: $(PROTO_GEN_CC) $(PROTO_GEN_HEADER)
 

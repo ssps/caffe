@@ -22,7 +22,7 @@ struct PsConfig {
 };
 
 struct RowAccessInfo {
-  vector<uint> row_ids;
+  vector<size_t> row_ids;
   int num_vals;
   bool data_in_mem;  /* Volatile field only used at virtual iteration */
   int data_handle;  /* Volatile field only used at virtual iteration */
@@ -71,10 +71,10 @@ struct LayerInfo {
   bool layer_need_backward;
   vector<bool> bottom_need_backward;
   bool local_param;
-  int table_id;
-  vector<uint> row_ids;
-  vector<uint> history_data_row_ids;
-  int num_vals;
+  size_t table_id;
+  vector<size_t> row_ids;
+  vector<size_t> history_data_row_ids;
+  size_t num_vals;
   vector<ParamInfo> param_infos;
   IntSet imbs_used_fw;
   IntSet imb_diffs_used_fw;
@@ -88,8 +88,8 @@ struct LayerInfo {
   vector<ImbInfo> imbs_to_release_bw;
   vector<ImbInfo> imb_diffs_to_access_bw;
   vector<ImbInfo> imb_diffs_to_release_bw;
-  int param_size;
-  int imb_size;
+  size_t param_size;
+  size_t imb_size;
   vector<LayerHandles> layer_handles;
   double fw_read_time;
   double fw_compute_time;
@@ -114,7 +114,8 @@ class Solver {
   void InitTrainNet();
   void InitTestNets();
   void InitPs();
-  void SetPsParamValues();
+  void InitSnapshot();
+  void InitNetParameterSnapshot();
   // The main entry of the solver function. In default, iter will be zero. Pass
   // in a non-zero iter number to resume training for a pre-trained net.
   virtual void Solve(const char* resume_file = NULL);
@@ -135,7 +136,9 @@ class Solver {
   // Make and apply the update value for the current iteration.
   virtual void ApplyUpdate() = 0;
   virtual Dtype ForwardBackwardUsingPs(const vector<Blob<Dtype>* > & bottom,
-      const shared_ptr<Net<Dtype> >& net, bool test) = 0;
+      const shared_ptr<Net<Dtype> >& net, bool test, bool do_snapshot) = 0;
+  virtual void InitSolverStateSnapshot() = 0;
+  virtual void InitPsValues() = 0;
   // The Solver::Snapshot function implements the basic snapshotting utility
   // that stores the learned net. You should implement the SnapshotSolverState()
   // function that produces a SolverState protocol buffer that needs to be
@@ -151,17 +154,20 @@ class Solver {
   SolverParameter param_;
 
   PsConfig ps_config_;
+  shared_ptr<LazyTableModule> ps_;
+
   vector<RowAccessInfo> imb_data_infos_;
   vector<RowAccessInfo> imb_diff_infos_;
   vector<LayerInfo> layer_infos_;
   vector<Blob<Dtype>*> test_net_output_blobs_;
 
+  NetParameter snapshot_net_param_protobuf_;
+  SolverState snapshot_solver_state_protobuf_;
+
   int iter_;
   int current_step_;
   shared_ptr<Net<Dtype> > net_;
   vector<shared_ptr<Net<Dtype> > > test_nets_;
-
-  shared_ptr<LazyTableModule> ps_;
 
   DISABLE_COPY_AND_ASSIGN(Solver);
 };
@@ -186,7 +192,9 @@ class SGDSolver : public Solver<Dtype> {
   Dtype GetLearningRate();
   virtual void ApplyUpdate();
   virtual Dtype ForwardBackwardUsingPs(const vector<Blob<Dtype>* > & bottom,
-      const shared_ptr<Net<Dtype> >& net, bool test);
+      const shared_ptr<Net<Dtype> >& net, bool test, bool do_snapshot);
+  virtual void InitPsValues();
+  virtual void InitSolverStateSnapshot();
   virtual void Normalize(int param_id);
   virtual void Regularize(int param_id);
   virtual void ComputeUpdateValue(int param_id, Dtype rate);
