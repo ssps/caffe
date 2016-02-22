@@ -17,8 +17,11 @@ struct PsConfig {
   int num_workers;
   int slack;
   int batches_per_clock;
+  int multi_table;
+  int layers_per_table;
   LazyTableConfig lt_config;
-  PsConfig() : no_ps(false), slack(0), batches_per_clock(1) {}
+  PsConfig() : no_ps(false), slack(0), batches_per_clock(1),
+      multi_table(1), layers_per_table(1) {}
 };
 
 struct RowAccessInfo {
@@ -97,6 +100,9 @@ struct LayerInfo {
   double bw_read_time;
   double bw_compute_time;
   double bw_write_time;
+  double test_time;
+  double snapshot_model_time;
+  double snapshot_solverstate_time;
 };
 
 /**

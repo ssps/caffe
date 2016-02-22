@@ -21,7 +21,6 @@ using std::cerr;
 using std::endl;
 using boost::make_shared;
 
-#define MULTI_TABLE
 #define LOCAL_DATA_IN_PS
 
 namespace caffe {
@@ -189,6 +188,7 @@ void Solver<float>::InitPs() {
   vector<shared_ptr<Blob<float> > >& params = this->net_->params_;
   layer_infos_.resize(layers.size());
   int total_num_params = 0;
+  int layer_count = 0;
   int table_id = 0;
   int row_id = 0;
   int local_store_row_id = 0;
@@ -228,12 +228,14 @@ void Solver<float>::InitPs() {
       }
       if (!layer_info.local_param) {
         layer_info.table_id = table_id;
-#if defined(MULTI_TABLE)
-        table_id++;
-        row_id = 0;
-#endif
+        layer_count++;
+        if (ps_config_.multi_table &&
+            (layer_count % ps_config_.layers_per_table == 0)) {
+          table_id++;
+          row_id = 0;
+        }
       } else {
-        /* The parameters of this layer will not be changed */
+        /* The parameters of this layer only need to be stored locally */
         layer_info.table_id = 0;
       }
     }
@@ -243,6 +245,9 @@ void Solver<float>::InitPs() {
     layer_info.bw_read_time = 0;
     layer_info.bw_compute_time = 0;
     layer_info.bw_write_time = 0;
+    layer_info.test_time = 0;
+    layer_info.snapshot_model_time = 0;
+    layer_info.snapshot_solverstate_time = 0;
   }
   CHECK_EQ(total_num_params, params.size());
   int num_tables = row_id == 0 ? table_id : table_id + 1;
@@ -927,19 +932,20 @@ void SGDSolver<float>::InitPsValues() {
     return;
   }
   vector<shared_ptr<Layer<float> > >& layers = this->net_->layers_;
+  vector<bool>& layer_need_backward = this->net_->layer_need_backward_;
   /* Set initial parameter values */
   for (int layer_id = 0; layer_id < layer_infos_.size(); layer_id++) {
     shared_ptr<Layer<float> >& layer = layers[layer_id];
     LayerInfo& layer_info = layer_infos_[layer_id];
     LayerHandles& layer_handles = layer_info.layer_handles[0];
-    if (layer_info.param_infos.size()) {
-      if (!layer_info.local_param) {
-        if (ps_config_.worker_id != 0) {
-          continue;
-        }
-      }
+    if (!layer_info.param_infos.size()) {
+      continue;
+    }
+    if (layer_info.local_param || ps_config_.worker_id == 0) {
+      /* Non-local parameters are stored in PS,
+       * so only one worker needs to set it. */
       /* Pre-write */
-      RowOpVal *inc_buffer;
+      RowData *inc_buffer = NULL;
       if (!layer_info.local_param) {
         ps_->preinc_batch(&inc_buffer, layer_handles.prewrite_handle);
       } else {
@@ -967,6 +973,7 @@ void SGDSolver<float>::InitPsValues() {
         change_head = true;
             /* "true" means that we will change the head to UNINITIALIZED */
         param->set_gpu_data(NULL, change_head);
+        CHECK_EQ(param->check_data_head(), SyncedMemory::UNINITIALIZED);
       }
       /* Write */
       if (!layer_info.local_param) {
@@ -974,44 +981,51 @@ void SGDSolver<float>::InitPsValues() {
       } else {
         ps_->postlocalaccess_batch(layer_handles.write_handle);
       }
+    } else {
+      CHECK(!layer_info.local_param && ps_config_.worker_id != 0);
+      /* The other workers set their parameter data head to UNINITIALIZED */
+      for (int param_id = 0;
+          param_id < layer_info.param_infos.size(); param_id++) {
+        shared_ptr<Blob<float> >& param = layer->blobs()[param_id];
+        bool change_head = true;
+            /* "true" means that we will change the head to UNINITIALIZED */
+        param->set_gpu_data(NULL, change_head);
+      }
     }
   }
   /* Set initial updates history values */
-  for (int layer_id = 0; layer_id < layer_infos_.size(); layer_id++) {\
+  for (int layer_id = 0; layer_id < layer_infos_.size(); layer_id++) {
     LayerInfo& layer_info = layer_infos_[layer_id];
     LayerHandles& layer_handles = layer_info.layer_handles[0];
-    if (layer_info.param_infos.size()) {
-      if (!layer_info.local_param) {
-        if (ps_config_.worker_id != 0) {
-          continue;
-        }
-      }
-      /* Pre-write */
-      RowData *history_buffer;
-      ps_->localaccess_batch(
-          &history_buffer, layer_handles.history_access_handle);
-      float *history_vals = reinterpret_cast<float *>(history_buffer);
-      for (int param_id = 0;
-          param_id < layer_info.param_infos.size(); param_id++) {
-        int param_val_offset = layer_info.param_infos[param_id].val_offset;
-        float *history_param_vals = &history_vals[param_val_offset];
-        int global_param_id =
-            layer_info.param_infos[param_id].global_param_id;
-        shared_ptr<Blob<float> >& updates_history = history_[global_param_id];
-        bool change_head = false;
-            /* "false" means that we will keep the head to be CPU_DATA.
-             * We want to keep what's currently in CPU memory */
-        updates_history->set_gpu_data(history_param_vals, change_head);
-        /* Values are filled in CPU memory, do a gpu_data() call to copy them
-         * to GPU memory */
-        updates_history->gpu_data();
-        change_head = true;
-            /* "true" means that we will change the head to UNINITIALIZED */
-        updates_history->set_gpu_data(NULL, change_head);
-      }
-      /* Write */
-      ps_->postlocalaccess_batch(layer_handles.history_postaccess_handle);
+    if (!layer_info.param_infos.size() || !layer_need_backward[layer_id]) {
+      continue;
     }
+    /* Pre-write */
+    RowData *history_buffer = NULL;
+    ps_->localaccess_batch(
+        &history_buffer, layer_handles.history_access_handle);
+    float *history_vals = reinterpret_cast<float *>(history_buffer);
+    for (int param_id = 0;
+        param_id < layer_info.param_infos.size(); param_id++) {
+      int param_val_offset = layer_info.param_infos[param_id].val_offset;
+      float *history_param_vals = &history_vals[param_val_offset];
+      int global_param_id =
+          layer_info.param_infos[param_id].global_param_id;
+      shared_ptr<Blob<float> >& updates_history = history_[global_param_id];
+      bool change_head = false;
+          /* "false" means that we will keep the head to be CPU_DATA.
+           * We want to keep what's currently in CPU memory */
+      updates_history->set_gpu_data(history_param_vals, change_head);
+      /* Values are filled in CPU memory, do a gpu_data() call to copy them
+       * to GPU memory */
+      updates_history->gpu_data();
+      change_head = true;
+          /* "true" means that we will change the head to UNINITIALIZED */
+      updates_history->set_gpu_data(NULL, change_head);
+    }
+    /* Write */
+    CHECK_GT(layer_handles.history_postaccess_handle, 0);
+    ps_->postlocalaccess_batch(layer_handles.history_postaccess_handle);
   }
   LOG(INFO) << "Set initial parameter values done";
   ps_->iterate();
@@ -1068,7 +1082,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
         if (print_) {
           LOG(INFO) << "Read params: handle #" << layer_handles.read_handle;
         }
-        RowOpVal *read_buffer;
+        RowData *read_buffer = NULL;
         if (!layer_info.local_param) {
           ps_->read_batch(&read_buffer, layer_handles.read_handle);
         } else {
@@ -1083,9 +1097,11 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
           shared_ptr<Blob<float> >& param = layer->blobs()[param_id];
           CHECK(!param->check_gpu_data())
               << "layer " << layer_names[layer_id] << " has gpu param";
+          CHECK_EQ(param->check_data_head(), SyncedMemory::UNINITIALIZED);
           param->set_gpu_data(param_vals, true);
           if (do_snapshot) {
             /* Write the model parameter data to snapshot protobuf */
+            tbb::tick_count snapshot_start;
             CHECK(!test);
             NetParameter& net_param_pb = this->snapshot_net_param_protobuf_;
             CHECK_LT(layer_id, net_param_pb.layer_size());
@@ -1094,7 +1110,10 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
             CHECK_LT(param_id, layer_pb->blobs_size());
             BlobProto *blob_pb = layer_pb->mutable_blobs(param_id);
             bool write_diff = false;
-            param->ToProto(blob_pb, write_diff);
+            bool write_data = true;
+            param->ToProto(blob_pb, write_diff, write_data);
+            layer_info.snapshot_model_time +=
+                (tbb::tick_count::now() - snapshot_start).seconds();
           }
         }
       }
@@ -1112,7 +1131,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
         }
         CHECK_LT(imb_info.global_imb_id, imbs.size());
         shared_ptr<Blob<float> >& imb = imbs[imb_info.global_imb_id];
-        RowOpVal *read_buffer;
+        RowData *read_buffer = NULL;
         ps_->localaccess_batch(&read_buffer, handle);
         CHECK(!imb->check_gpu_data())
             << "layer " << layer_names[layer_id] << " has gpu data "
@@ -1132,7 +1151,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
         }
         CHECK_LT(imb_info.global_imb_id, imbs.size());
         shared_ptr<Blob<float> >& imb = imbs[imb_info.global_imb_id];
-        RowOpVal *read_buffer;
+        RowData *read_buffer = NULL;
         ps_->localaccess_batch(&read_buffer, handle);
         CHECK(!imb->check_gpu_diff())
             << "layer " << layer_names[layer_id] << " has gpu diff";
@@ -1142,6 +1161,9 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
       CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
       if (!test) {
         layer_info.fw_read_time +=
+            (tbb::tick_count::now() - tick_start).seconds();
+      } else {
+        layer_info.test_time +=
             (tbb::tick_count::now() - tick_start).seconds();
       }
 
@@ -1183,6 +1205,9 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
       loss += layer_loss;
       if (!test) {
         layer_info.fw_compute_time +=
+            (tbb::tick_count::now() - tick_start).seconds();
+      } else {
+        layer_info.test_time +=
             (tbb::tick_count::now() - tick_start).seconds();
       }
 
@@ -1244,6 +1269,9 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
       if (!test) {
         layer_info.fw_write_time +=
             (tbb::tick_count::now() - tick_start).seconds();
+      } else {
+        layer_info.test_time +=
+            (tbb::tick_count::now() - tick_start).seconds();
       }
     }
 
@@ -1271,7 +1299,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
           LOG(INFO) << "Prepare write buffers";
         }
         CHECK(!layer_info.local_param);
-        RowOpVal *write_buffer;
+        RowData *write_buffer = NULL;
         ps_->preinc_batch(&write_buffer, layer_handles.prewrite_handle);
         float *write_params_vals = reinterpret_cast<float *>(write_buffer);
         size_t size = layer_info.num_vals * sizeof(float);
@@ -1290,7 +1318,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
         if (print_) {
           LOG(INFO) << "Read params";
         }
-        RowOpVal *read_buffer;
+        RowData *read_buffer = NULL;
         ps_->read_batch(&read_buffer, layer_handles.bw_read_handle);
         float *read_params_vals = reinterpret_cast<float *>(read_buffer);
         for (int param_id = 0;
@@ -1301,7 +1329,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
           param->set_gpu_data(param_vals, true);
         }
         /* Access local updates history */
-        RowOpVal *history_buffer;
+        RowData *history_buffer = NULL;
         ps_->localaccess_batch(
             &history_buffer, layer_handles.history_access_handle);
         float *history_vals = reinterpret_cast<float *>(history_buffer);
@@ -1320,13 +1348,17 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
           // }
           if (do_snapshot) {
             /* Write the updates history data to solver state protobuf */
+            tbb::tick_count snapshot_start;
             CHECK(!test);
             SolverState& solverstate_pb = this->snapshot_solver_state_protobuf_;
             CHECK_LT(global_param_id, solverstate_pb.history_size());
             BlobProto *history_pb =
                 solverstate_pb.mutable_history(global_param_id);
             bool write_diff = false;
-            updates_history->ToProto(history_pb, write_diff);
+            bool write_data = true;
+            updates_history->ToProto(history_pb, write_diff, write_data);
+            layer_info.snapshot_solverstate_time +=
+                (tbb::tick_count::now() - snapshot_start).seconds();
           }
         }
       }
@@ -1343,7 +1375,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
           LOG(INFO) << "Read data " << imb_info.global_imb_id;
         }
         shared_ptr<Blob<float> >& imb = imbs[imb_info.global_imb_id];
-        RowOpVal *imb_buffer;
+        RowData *imb_buffer = NULL;
         ps_->localaccess_batch(&imb_buffer, handle);
         CHECK(!imb->check_gpu_data())
             << "layer " << layer_names[layer_id] << " has gpu data";
@@ -1361,7 +1393,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
           LOG(INFO) << "Read diff " << imb_info.global_imb_id;
         }
         shared_ptr<Blob<float> >& imb = imbs[imb_info.global_imb_id];
-        RowOpVal *imb_buffer;
+        RowData *imb_buffer = NULL;
         ps_->localaccess_batch(&imb_buffer, handle);
         CHECK(!imb->check_gpu_diff())
             << "layer " << layer_names[layer_id] << " has gpu diff";
@@ -1371,6 +1403,9 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
       CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
       if (!test) {
         layer_info.bw_read_time +=
+            (tbb::tick_count::now() - tick_start).seconds();
+      } else {
+        layer_info.test_time +=
             (tbb::tick_count::now() - tick_start).seconds();
       }
 
@@ -1468,6 +1503,9 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
       if (!test) {
         layer_info.bw_write_time +=
             (tbb::tick_count::now() - tick_start).seconds();
+      } else {
+        layer_info.test_time +=
+            (tbb::tick_count::now() - tick_start).seconds();
       }
 
       if (layer_info.param_infos.size()) {
@@ -1499,6 +1537,9 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
         if (!test) {
           layer_info.bw_compute_time +=
               (tbb::tick_count::now() - tick_start).seconds();
+        } else {
+          layer_info.test_time +=
+              (tbb::tick_count::now() - tick_start).seconds();
         }
 
         tick_start = tbb::tick_count::now();
@@ -1528,6 +1569,9 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
         if (!test) {
           layer_info.bw_write_time +=
               (tbb::tick_count::now() - tick_start).seconds();
+        } else {
+          layer_info.test_time +=
+              (tbb::tick_count::now() - tick_start).seconds();
         }
       }
     }
@@ -1548,10 +1592,11 @@ void Solver<Dtype>::InitNetParameterSnapshot() {
   /* Init snapshot protobuf for model parameters.
    * We will keep using this protobuf structure in future snapshots. */
   /* I just call the Net::ToProto() function,
-   * though we actually don't need the Net::ToProto() function to
+   * and I don't need the Net::ToProto() function to
    * write blob data in this template protobuf. */
   bool write_diff = false;
-  this->net_->ToProto(&snapshot_net_param_protobuf_, write_diff);
+  bool write_data = false;
+  this->net_->ToProto(&snapshot_net_param_protobuf_, write_diff, write_data);
 }
 
 template <typename Dtype>
@@ -1594,6 +1639,7 @@ void Solver<Dtype>::Step(int iters) {
   InitPsValues();
   InitSnapshot();
 
+  double write_snapshot_time = 0.0;
   tbb::tick_count tick_start = tbb::tick_count::now();
 
   while (iter_ < (stop_iter + 1)) {
@@ -1609,10 +1655,12 @@ void Solver<Dtype>::Step(int iters) {
         && (iter_ % 1000 == 0 || iter_ == stop_iter);
 
     if (print_ps_info) {
-      double training_time = (tbb::tick_count::now() - tick_start).seconds();
+      double total_time = (tbb::tick_count::now() - tick_start).seconds();
       double read_time = 0;
       double write_time = 0;
       double compute_time = 0;
+      double test_time = 0;
+      double snapshot_time = 0;
       for (int i = 0; i < layer_infos_.size(); i++) {
         read_time += layer_infos_[i].fw_read_time;
         read_time += layer_infos_[i].bw_read_time;
@@ -1620,25 +1668,31 @@ void Solver<Dtype>::Step(int iters) {
         write_time += layer_infos_[i].bw_write_time;
         compute_time += layer_infos_[i].fw_compute_time;
         compute_time += layer_infos_[i].bw_compute_time;
+        test_time += layer_infos_[i].test_time;
+        snapshot_time += layer_infos_[i].snapshot_model_time;
+        snapshot_time += layer_infos_[i].snapshot_solverstate_time;
       }
+      snapshot_time += write_snapshot_time;
       LOG(INFO) << "Read PS time: " << read_time;
       LOG(INFO) << "Write PS time: " << write_time;
       LOG(INFO) << "Compute time: " << compute_time;
-      // LOG(INFO) << "Compute time: " << training_time - read_time;
-      LOG(INFO) << "Training time: " << training_time;
-      // LOG(INFO) << "Per layer forwardbackward times:";
-      // for (int i = 0; i < layer_infos_.size(); i++) {
-        // cerr << i << "," << layer_infos_[i].fw_read_time
-             // << "," << layer_infos_[i].fw_compute_time
-             // << "," << layer_infos_[i].fw_write_time
-             // << endl;
-      // }
-      // for (int i = layer_infos_.size() - 1; i >= 0; i--) {
-        // cerr << i << "," << layer_infos_[i].bw_read_time
-             // << "," << layer_infos_[i].bw_compute_time
-             // << "," << layer_infos_[i].bw_write_time
-             // << endl;
-      // }
+      LOG(INFO) << "Test time: " << test_time;
+      LOG(INFO) << "Snapshot time: " << snapshot_time;
+      // LOG(INFO) << "Compute time: " << total_time - read_time;
+      LOG(INFO) << "Total time: " << total_time;
+      LOG(INFO) << "Per layer forwardbackward times:";
+      for (int i = 0; i < layer_infos_.size(); i++) {
+        cerr << i << "," << layer_infos_[i].fw_read_time
+             << "," << layer_infos_[i].fw_compute_time
+             << "," << layer_infos_[i].fw_write_time
+             << endl;
+      }
+      for (int i = layer_infos_.size() - 1; i >= 0; i--) {
+        cerr << i << "," << layer_infos_[i].bw_read_time
+             << "," << layer_infos_[i].bw_compute_time
+             << "," << layer_infos_[i].bw_write_time
+             << endl;
+      }
     }
 
     if (do_test) {
@@ -1686,7 +1740,10 @@ void Solver<Dtype>::Step(int iters) {
 
     /* Write snapshot files */
     if (do_snapshot) {
+      tbb::tick_count snapshot_start = tbb::tick_count::now();
       Snapshot();
+      write_snapshot_time +=
+          (tbb::tick_count::now() - snapshot_start).seconds();
     }
 
     // Increment the internal iter_ counter -- its value should always indicate
@@ -1916,6 +1973,7 @@ void SGDSolver<Dtype>::PreSolve() {
     update_.push_back(shared_ptr<Blob<Dtype> >(new Blob<Dtype>(shape)));
     temp_.push_back(shared_ptr<Blob<Dtype> >(new Blob<Dtype>(shape)));
   }
+  /* I assume the values will be zerofied on allocation (in SyncedMemory)*/
 }
 
 template <typename Dtype>

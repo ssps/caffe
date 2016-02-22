@@ -233,9 +233,12 @@ class Blob {
   const Dtype* check_gpu_data() const;
   const Dtype* check_cpu_diff() const;
   const Dtype* check_gpu_diff() const;
+  SyncedMemory::SyncedHead check_data_head() const;
+  SyncedMemory::SyncedHead check_diff_head() const;
   void Update();
   void FromProto(const BlobProto& proto, bool reshape = true);
-  void ToProto(BlobProto* proto, bool write_diff = false) const;
+  void ToProto(
+      BlobProto* proto, bool write_diff = false, bool write_data = true) const;
 
   /// @brief Compute the sum of absolute values (L1 norm) of the data.
   Dtype asum_data() const;

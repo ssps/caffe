@@ -21,9 +21,10 @@ void ThresholdLayer<Dtype>::Forward_gpu(const vector<Blob<Dtype>*>& bottom,
   Dtype* top_data = top[0]->mutable_gpu_data();
   const int count = bottom[0]->count();
   // NOLINT_NEXT_LINE(whitespace/operators)
-  ThresholdForward<Dtype><<<CAFFE_GET_BLOCKS(count), CAFFE_CUDA_NUM_THREADS>>>(
+  ThresholdForward<Dtype><<<CAFFE_GET_BLOCKS(count), CAFFE_CUDA_NUM_THREADS,
+                            0, Caffe::cuda_stream()>>>(
       count, threshold_, bottom_data, top_data);
-  CUDA_POST_KERNEL_CHECK;
+  CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
 }
 
 

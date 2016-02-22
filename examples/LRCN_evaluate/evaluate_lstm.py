@@ -4,14 +4,14 @@ import glob
 import os
 import h5py
 import argparse
-import hickle as hkl
+# import hickle as hkl
 import pdb 
 import time
 caffe_root = '../../'
 sys.path.insert(0, '../../python/')
 import caffe
 caffe.set_mode_gpu()
-caffe.set_device(1)
+caffe.set_device(0)
 from multiprocessing import Pool
 
 def evaluate_lstm(model_weights, h5_file_list, model='deploy_lstm.prototxt'):
@@ -123,7 +123,8 @@ def extract_features(model_weights, flow=False, split=1, save_folder='extracted_
     print 'Creating folder %s.' %save_folder
     os.mkdir(sf)
   
-  model_file = '../LRCN_activity_recognition/deploy_singleFrame.prototxt'
+  # model_file = '../LRCN_activity_recognition/deploy_singleFrame.prototxt'
+  model_file = 'deploy_lstm_im.prototxt'
   
   #max number frames per h5
   max_save_frames = 50000

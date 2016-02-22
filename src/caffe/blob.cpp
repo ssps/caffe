@@ -160,6 +160,18 @@ const Dtype* Blob<Dtype>::check_gpu_diff() const {
 }
 
 template <typename Dtype>
+SyncedMemory::SyncedHead Blob<Dtype>::check_data_head() const {
+  CHECK(data_);
+  return data_->head();
+}
+
+template <typename Dtype>
+SyncedMemory::SyncedHead Blob<Dtype>::check_diff_head() const {
+  CHECK(diff_);
+  return diff_->head();
+}
+
+template <typename Dtype>
 void Blob<Dtype>::ShareData(const Blob& other) {
   CHECK_EQ(count_, other.count());
   data_ = other.data();
@@ -512,16 +524,19 @@ void Blob<Dtype>::FromProto(const BlobProto& proto, bool reshape) {
 }
 
 template <typename Dtype>
-void Blob<Dtype>::ToProto(BlobProto* proto, bool write_diff) const {
+void Blob<Dtype>::ToProto(
+    BlobProto* proto, bool write_diff, bool write_data) const {
   proto->clear_shape();
   for (int i = 0; i < shape_.size(); ++i) {
     proto->mutable_shape()->add_dim(shape_[i]);
   }
   proto->clear_data();
   proto->clear_diff();
-  const Dtype* data_vec = cpu_data();
-  for (int i = 0; i < count_; ++i) {
-    proto->add_data(data_vec[i]);
+  if (write_data) {
+    const Dtype* data_vec = cpu_data();
+    for (int i = 0; i < count_; ++i) {
+      proto->add_data(data_vec[i]);
+    }
   }
   if (write_diff) {
     const Dtype* diff_vec = cpu_diff();

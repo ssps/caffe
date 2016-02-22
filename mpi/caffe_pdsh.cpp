@@ -1,5 +1,3 @@
-#include <mpi.h>
-
 #include <boost/program_options.hpp>
 #include <boost/format.hpp>
 
@@ -26,7 +24,10 @@ using caffe::shared_ptr;
 using caffe::Timer;
 using caffe::vector;
 
-
+DEFINE_int32(worker_id, 0,
+    "");
+DEFINE_int32(num_workers, 1,
+    "");
 DEFINE_int32(gpu, -1,
     "Run in GPU mode on given device ID.");
 DEFINE_string(solver, "",
@@ -188,10 +189,8 @@ void parse_config_file(caffe::PsConfig& ps_config) {
 // Train / Finetune a model.
 int train() {
   // Cui: change solver file name according to the worker_id
-  int num_workers;
-  int worker_id;
-  MPI_Comm_size(MPI_COMM_WORLD, &num_workers);
-  MPI_Comm_rank(MPI_COMM_WORLD, &worker_id);
+  int num_workers = FLAGS_num_workers;
+  int worker_id = FLAGS_worker_id;
   FLAGS_solver = (boost::format("%s.%i") % FLAGS_solver % worker_id).str();
   LOG(INFO) << "Use solver " << FLAGS_solver;
 
@@ -242,7 +241,6 @@ int train() {
   }
   LOG(INFO) << "Optimization Done.";
 
-  MPI_Barrier(MPI_COMM_WORLD);
   return 0;
 }
 RegisterBrewFunction(train);
@@ -402,11 +400,7 @@ int time() {
 RegisterBrewFunction(time);
 
 int main(int argc, char** argv) {
-  MPI_Init(&argc, &argv);
-  int num_processes, process_rank;
-  MPI_Comm_size(MPI_COMM_WORLD, &num_processes);
-  MPI_Comm_rank(MPI_COMM_WORLD, &process_rank);
-  std::cout << "process_rank = " << process_rank << std::endl;
+  std::cout << "process_rank = " << FLAGS_worker_id << std::endl;
 
   // Print output to stderr (while still logging).
   FLAGS_alsologtostderr = 1;

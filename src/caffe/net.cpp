@@ -39,8 +39,8 @@ void Net<Dtype>::Init(const NetParameter& in_param) {
   // the current NetState.
   NetParameter filtered_param;
   FilterNet(in_param, &filtered_param);
-  LOG(INFO) << "Initializing net from parameters: " << std::endl
-            << filtered_param.DebugString();
+  // LOG(INFO) << "Initializing net from parameters: " << std::endl
+            // << filtered_param.DebugString();
   // Create a copy of filtered_param with splits added where necessary.
   NetParameter param;
   InsertSplits(filtered_param, &param);
@@ -772,7 +772,8 @@ void Net<Dtype>::CopyTrainedLayersFrom(const string trained_filename) {
 }
 
 template <typename Dtype>
-void Net<Dtype>::ToProto(NetParameter* param, bool write_diff) const {
+void Net<Dtype>::ToProto(
+    NetParameter* param, bool write_diff, bool write_data) const {
   param->Clear();
   param->set_name(name_);
   // Add bottom and top
@@ -788,7 +789,7 @@ void Net<Dtype>::ToProto(NetParameter* param, bool write_diff) const {
     for (int j = 0; j < top_id_vecs_[i].size(); ++j) {
       layer_param->add_top(blob_names_[top_id_vecs_[i][j]]);
     }
-    layers_[i]->ToProto(layer_param, write_diff);
+    layers_[i]->ToProto(layer_param, write_diff, write_data);
   }
 }
 

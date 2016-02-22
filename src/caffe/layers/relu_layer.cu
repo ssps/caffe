@@ -22,9 +22,10 @@ void ReLULayer<Dtype>::Forward_gpu(const vector<Blob<Dtype>*>& bottom,
   const int count = bottom[0]->count();
   Dtype negative_slope = this->layer_param_.relu_param().negative_slope();
   // NOLINT_NEXT_LINE(whitespace/operators)
-  ReLUForward<Dtype><<<CAFFE_GET_BLOCKS(count), CAFFE_CUDA_NUM_THREADS>>>(
+  ReLUForward<Dtype><<<CAFFE_GET_BLOCKS(count), CAFFE_CUDA_NUM_THREADS,
+                       0, Caffe::cuda_stream()>>>(
       count, bottom_data, top_data, negative_slope);
-  CUDA_POST_KERNEL_CHECK;
+  CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
   // << " count: " << count << " bottom_data: "
   //     << (unsigned long)bottom_data
   //     << " top_data: " << (unsigned long)top_data
@@ -52,9 +53,10 @@ void ReLULayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top,
     const int count = bottom[0]->count();
     Dtype negative_slope = this->layer_param_.relu_param().negative_slope();
     // NOLINT_NEXT_LINE(whitespace/operators)
-    ReLUBackward<Dtype><<<CAFFE_GET_BLOCKS(count), CAFFE_CUDA_NUM_THREADS>>>(
+    ReLUBackward<Dtype><<<CAFFE_GET_BLOCKS(count), CAFFE_CUDA_NUM_THREADS,
+                          0, Caffe::cuda_stream()>>>(
         count, top_diff, bottom_data, bottom_diff, negative_slope);
-    CUDA_POST_KERNEL_CHECK;
+    CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
   }
 }
 

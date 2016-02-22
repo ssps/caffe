@@ -10,5 +10,5 @@ cp examples/fullimagenet/8parts/mynet_train_val.prototxt.template $1/.
 cp examples/fullimagenet/8parts/mynet_solver.prototxt.template $1/.
 cp examples/fullimagenet/8parts/machinefile $1/.
 cp examples/fullimagenet/8parts/ps_config $1/.
-mpirun -machinefile examples/fullimagenet/8parts/machinefile ./build/tools/caffe_mpi train --solver=examples/fullimagenet/8parts/mynet_solver.prototxt --ps_config=examples/fullimagenet/8parts/ps_config 2>&1 | tee $1/output.txt
+mpirun -machinefile examples/fullimagenet/8parts/machinefile ./build/tools/caffe_mpi train --solver=examples/fullimagenet/8parts/mynet_solver.prototxt --ps_config=examples/fullimagenet/8parts/ps_config_mynet 2>&1 | tee $1/output.txt
 

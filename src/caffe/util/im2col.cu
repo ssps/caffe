@@ -52,11 +52,12 @@ void im2col_gpu(const Dtype* data_im, const int channels,
   int num_kernels = channels * height_col * width_col;
   // NOLINT_NEXT_LINE(whitespace/operators)
   im2col_gpu_kernel<Dtype><<<CAFFE_GET_BLOCKS(num_kernels),
-                             CAFFE_CUDA_NUM_THREADS>>>(
+                             CAFFE_CUDA_NUM_THREADS,
+                             0, Caffe::cuda_stream()>>>(
       num_kernels, data_im, height, width, kernel_h, kernel_w, pad_h,
       pad_w, stride_h, stride_w, height_col,
       width_col, data_col);
-  CUDA_POST_KERNEL_CHECK;
+  CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
 }
 
 
@@ -124,11 +125,12 @@ void col2im_gpu(const Dtype* data_col, const int channels,
   // bottom dimension, and then in the kernel add up the top dimensions.
   // NOLINT_NEXT_LINE(whitespace/operators)
   col2im_gpu_kernel<Dtype><<<CAFFE_GET_BLOCKS(num_kernels),
-                             CAFFE_CUDA_NUM_THREADS>>>(
+                             CAFFE_CUDA_NUM_THREADS,
+                             0, Caffe::cuda_stream()>>>(
       num_kernels, data_col, height, width, channels, patch_h, patch_w,
       pad_h, pad_w, stride_h, stride_w,
       height_col, width_col, data_im);
-  CUDA_POST_KERNEL_CHECK;
+  CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
 }
 
 // Explicit instantiation

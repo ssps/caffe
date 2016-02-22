@@ -5,10 +5,13 @@ from datetime import datetime, timedelta
 input_file = sys.argv[1]
 num_workers = 8
 training_accuracy = 0
+pdsh = 0
 if len(sys.argv) > 2:
   num_workers = int(sys.argv[2])
 if len(sys.argv) > 3:
   training_accuracy = int(sys.argv[3])
+if len(sys.argv) > 4:
+  pdsh = int(sys.argv[4])
 
 input_fd = open(input_file, 'r')
 times = []
@@ -16,17 +19,17 @@ accuracys = []
 time_start = 0
 for line in input_fd:
   strs = line.split()
-  if time_start == 0 and (len(strs) == 9 or len(strs) == 10) and strs[6] == 'loss':
-    time_tuple = datetime.strptime(strs[1], "%H:%M:%S.%f")
+  if time_start == 0 and (len(strs) == 9 + pdsh or len(strs) == 10 + pdsh) and strs[6 + pdsh] == 'loss':
+    time_tuple = datetime.strptime(strs[1 + pdsh], "%H:%M:%S.%f")
     time_start = time_tuple.hour * 3600 + time_tuple.minute * 60 + time_tuple.second
-  if not len(strs) == 11:
+  if not len(strs) == 11 + pdsh:
     continue
-  if not (not training_accuracy and strs[4] == 'Test' and strs[8] == 'accuracy') and not (training_accuracy and strs[4] == 'Train' and strs[8] == 'accuracy') and not strs[8] == 'loss3/top-1':
+  if not (not training_accuracy and strs[4 + pdsh] == 'Test' and strs[8 + pdsh] == 'accuracy') and not (training_accuracy and strs[4 + pdsh] == 'Train' and strs[8 + pdsh] == 'accuracy') and not strs[8 + pdsh] == 'loss3/top-1':
     continue
   # times.append(float(strs[5][:-1]))
-  time_tuple = datetime.strptime(strs[1], "%H:%M:%S.%f")
+  time_tuple = datetime.strptime(strs[1 + pdsh], "%H:%M:%S.%f")
   times.append(time_tuple.hour * 3600 + time_tuple.minute * 60 + time_tuple.second)
-  accuracys.append(float(strs[10]))
+  accuracys.append(float(strs[10 + pdsh]))
 
 n = len(accuracys)
 count = 0

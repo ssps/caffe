@@ -23,9 +23,9 @@ inline void SyncedMemory::to_cpu() {
   case UNINITIALIZED:
     if (cpu_ptr_ == NULL) {
       CaffeMallocHost(&cpu_ptr_, size_);
-      caffe_memset(size_, 0, cpu_ptr_);
       own_cpu_data_ = true;
     }
+    caffe_memset(size_, 0, cpu_ptr_);
     head_ = HEAD_AT_CPU;
     break;
   case HEAD_AT_GPU:
@@ -53,9 +53,9 @@ inline void SyncedMemory::to_gpu() {
     if (gpu_ptr_ == NULL) {
       LOG(INFO) << "Allocate GPU data for UNINITIALIZED with size " << size_;
       CUDA_CHECK(cudaMalloc(&gpu_ptr_, size_));
-      caffe_gpu_memset(size_, 0, gpu_ptr_);
       own_gpu_data_ = true;
     }
+    caffe_gpu_memset(size_, 0, gpu_ptr_);
     head_ = HEAD_AT_GPU;
     break;
   case HEAD_AT_CPU:
@@ -99,37 +99,27 @@ void SyncedMemory::set_gpu_data(void* data, bool change_head) {
   // LOG(INFO) << "cpu_ptr_ = " << cpu_ptr_;
   // LOG(INFO) << "own_cpu_data_ = " << own_cpu_data_;
   // LOG(INFO) << "head_ = " << head_;
+  CHECK(!own_gpu_data_) << "own_gpu_data for " << this;
   if (data != NULL) {
-    CHECK(!own_gpu_data_) << "own_gpu_data for " << this;
     CHECK(!gpu_ptr_);
-  }
-  if (data == NULL) {
-    CHECK(!own_gpu_data_) << "own_gpu_data for " << this;
-    CHECK(gpu_ptr_);
-  }
-  if (own_gpu_data_ && gpu_ptr_) {
-    /* Should not happen */
-    CHECK(0);
-    CUDA_CHECK(cudaFree(gpu_ptr_));
   }
   gpu_ptr_ = data;
   own_gpu_data_ = false;
   if (change_head) {
-    // CHECK_NE(head_, HEAD_AT_CPU);
-    if (head_ == HEAD_AT_CPU) {
-      // LOG(INFO) << "WARNING: HEAD_AT_CPU!!!";
-    }
     if (data != NULL) {
+      CHECK_NE(head_, HEAD_AT_CPU) << ", this = " << this << ", data = " << data;
       head_ = HEAD_AT_GPU;
     } else {
+      if (head_ == HEAD_AT_CPU) {
+        LOG(INFO) << "***WARNING: set_gpu_data(): cleaning up CPU data";
+      }
       head_ = UNINITIALIZED;
     }
   } else {
-    if (head_ == SYNCED) {
-      head_ = HEAD_AT_CPU;
-    }
-    if (head_ == HEAD_AT_GPU) {
-      head_ = UNINITIALIZED;
+    CHECK_NE(head_, HEAD_AT_GPU);
+    CHECK_NE(head_, SYNCED);
+    if (head_ == UNINITIALIZED) {
+      LOG(INFO) << "***WARNING: set_gpu_data(): no_change_head but no CPU data";
     }
   }
 }

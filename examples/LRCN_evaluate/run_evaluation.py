@@ -14,7 +14,7 @@ parser.add_argument("--save_folder", type=str, default='extracted_features')
 #path for image frames (flow or RGB)
 parser.add_argument("--im_path", type=str, default='frames')
 #deploy prototxt for extracting features
-parser.add_argument("--deploy_im", type=str, default='deploy_lstm_im.prototxt')
+parser.add_argument("--deploy_im", type=str, default='deploy_lstm_im2.prototxt')
 #deploy prototxt for evaluating lstm
 parser.add_argument("--deploy_lstm", type=str, default='deploy_lstm_lstm.prototxt')
 

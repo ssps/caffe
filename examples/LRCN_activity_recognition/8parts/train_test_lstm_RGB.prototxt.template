@@ -1,34 +1,44 @@
-name: "singleFrame_flow"
-input: "data"
-input_dim: 160
-input_dim: 3
-input_dim: 227
-input_dim: 227
+name: "lstm_joints"
+layer {
+  name: "data"
+  type: "Python"
+  top: "data"
+  top: "label"
+  top: "clip_markers"
+  python_param {
+    module: "sequence_input_layer%"
+    layer: "videoReadTrain_RGB"
+  }
+  include: { phase: TRAIN }
+}
+
+layer {
+  name: "data"
+  type: "Python"
+  top: "data"
+  top: "label"
+  top: "clip_markers"
+  python_param {
+    module: "sequence_input_layer%"
+    layer: "videoReadTest_RGB"
+  }
+  include: { phase: TEST stage: "test-on-test" }
+}
 layer {
   name: "conv1"
   type: "Convolution"
   bottom: "data"
   top: "conv1"
   param {
-    lr_mult: 1
-    decay_mult: 1
+    lr_mult: 0
   }
   param {
-    lr_mult: 2
-    decay_mult: 0
+    lr_mult: 0
   }
   convolution_param {
     num_output: 96
     kernel_size: 7
     stride: 2
-    weight_filler {
-      type: "gaussian"
-      std: 0.01
-    }
-    bias_filler {
-      type: "constant"
-      value: 0.1
-    }
   }
 }
 layer {
@@ -66,26 +76,16 @@ layer {
   bottom: "norm1"
   top: "conv2"
   param {
-    lr_mult: 1
-    decay_mult: 1
+    lr_mult: 0
   }
   param {
-    lr_mult: 2
-    decay_mult: 0
+    lr_mult: 0
   }
   convolution_param {
     num_output: 384
     kernel_size: 5
     group: 2
     stride: 2
-    weight_filler {
-      type: "gaussian"
-      std: 0.01
-    }
-    bias_filler {
-      type: "constant"
-      value: 0.1
-    }
   }
 }
 layer {
@@ -123,25 +123,15 @@ layer {
   bottom: "norm2"
   top: "conv3"
   param {
-    lr_mult: 1
-    decay_mult: 1
+    lr_mult: 0
   }
   param {
-    lr_mult: 2
-    decay_mult: 0
+    lr_mult: 0
   }
   convolution_param {
     num_output: 512
     pad: 1
     kernel_size: 3
-    weight_filler {
-      type: "gaussian"
-      std: 0.01
-    }
-    bias_filler {
-      type: "constant"
-      value: 0.1
-    }
   }
 }
 layer {
@@ -156,26 +146,16 @@ layer {
   bottom: "conv3"
   top: "conv4"
   param {
-    lr_mult: 1
-    decay_mult: 1
+    lr_mult: 0
   }
   param {
-    lr_mult: 2
-    decay_mult: 0
+    lr_mult: 0
   }
   convolution_param {
     num_output: 512
     pad: 1
     kernel_size: 3
     group: 2
-    weight_filler {
-      type: "gaussian"
-      std: 0.01
-    }
-    bias_filler {
-      type: "constant"
-      value: 0.1
-    }
   }
 }
 layer {
@@ -190,26 +170,16 @@ layer {
   bottom: "conv4"
   top: "conv5"
   param {
-    lr_mult: 1
-    decay_mult: 1
+    lr_mult: 0
   }
   param {
-    lr_mult: 2
-    decay_mult: 0
+    lr_mult: 0
   }
   convolution_param {
     num_output: 384
     pad: 1
     kernel_size: 3
     group: 2
-    weight_filler {
-      type: "gaussian"
-      std: 0.01
-    }
-    bias_filler {
-      type: "constant"
-      value: 0.1
-    }
   }
 }
 layer {
@@ -235,23 +205,13 @@ layer {
   bottom: "pool5"
   top: "fc6"
   param {
-    lr_mult: 1
-    decay_mult: 1
+    lr_mult: 0
   }
   param {
-    lr_mult: 2
-    decay_mult: 0
+    lr_mult: 0
   }
   inner_product_param {
     num_output: 4096
-    weight_filler {
-      type: "gaussian"
-      std: 0.01
-    }
-    bias_filler {
-      type: "constant"
-      value: 0.1
-    }
   }
 }
 layer {
@@ -266,54 +226,125 @@ layer {
   bottom: "fc6"
   top: "fc6"
   dropout_param {
-    dropout_ratio: 0.5
+    dropout_ratio: 0.9
   }
 }
-layer {
-  name: "fc7"
-  type: "InnerProduct"
+layer{
+  name: "reshape-data"
+  type: "Reshape"
   bottom: "fc6"
-  top: "fc7"
-  param {
-    lr_mult: 1
-    decay_mult: 1
+  top: "fc6-reshape"
+  reshape_param{
+    shape{
+      dim: 16
+      # dim: 24
+      dim: 12   # Number of videos per batch
+      dim: 4096
+    }
   }
-  param {
-    lr_mult: 2
-    decay_mult: 0
+  include: { phase: TRAIN }
+}
+layer{
+  name: "reshape-data"
+  type: "Reshape"
+  bottom: "fc6"
+  top: "fc6-reshape"
+  reshape_param{
+    shape{
+      dim: 16
+      dim: 12
+      dim: 4096
+    }
   }
-  inner_product_param {
-    num_output: 4096
+  include: { phase: TEST stage: "test-on-test" }
+}
+layer{
+  name: "reshape-label"
+  type: "Reshape"
+  bottom: "label"
+  top: "reshape-label"
+  reshape_param{
+    shape{
+      dim: 16
+      # dim: 24
+      dim: 12   # Number of videos per batch
+    }
+  }
+  include: { phase: TRAIN }
+}
+layer{
+  name: "reshape-label"
+  type: "Reshape"
+  bottom: "label"
+  top: "reshape-label"
+  reshape_param{
+    shape{
+      dim: 16
+      dim: 12
+    }
+  }
+  include: { phase: TEST stage: "test-on-test" }
+}
+layer{
+  name: "reshape-cm"
+  type: "Reshape"
+  bottom: "clip_markers"
+  top: "reshape-cm"
+  reshape_param{
+    shape{
+      dim: 16
+      # dim: 24
+      dim: 12   # Number of videos per batch
+    }
+  }
+  include: { phase: TRAIN }
+}
+layer{
+  name: "reshape-cm"
+  type: "Reshape"
+  bottom: "clip_markers"
+  top: "reshape-cm"
+  reshape_param{
+    shape{
+      dim: 16
+      dim: 12
+    }
+  }
+  include: { phase: TEST stage: "test-on-test" }
+}
+layer {
+  name: "lstm1"
+  type: "LSTM"
+  bottom: "fc6-reshape"
+  bottom: "reshape-cm"
+  top: "lstm1"
+  recurrent_param {
+    num_output: 256
     weight_filler {
-      type: "gaussian"
-      std: 0.01
+      type: "uniform"
+      min: -0.01
+      max: 0.01
     }
     bias_filler {
       type: "constant"
-      value: 0.1
+      value: 0
     }
   }
 }
 layer {
-  name: "relu7"
-  type: "ReLU"
-  bottom: "fc7"
-  top: "fc7"
-}
-layer {
-  name: "drop7"
+  name: "lstm1-drop"
   type: "Dropout"
-  bottom: "fc7"
-  top: "fc7"
+  bottom: "lstm1"
+  top: "lstm1-drop"
   dropout_param {
     dropout_ratio: 0.5
   }
 }
 layer {
-  name: "fc8-ucf"
+  name: "fc8-final"
   type: "InnerProduct"
-  bottom: "fc7"
-  top: "fc8-ucf"
+  bottom: "lstm1-drop"
+  top: "fc8-final"
   param {
     lr_mult: 10
     decay_mult: 1
@@ -332,11 +363,26 @@ layer {
       type: "constant"
       value: 0
     }
+    axis: 2
   }
 }
 layer {
-  name: "probs"
-  type: "Softmax"
-  bottom: "fc8-ucf"
-  top: "probs"
+  name: "loss"
+  type: "SoftmaxWithLoss"
+  bottom: "fc8-final"
+  bottom: "reshape-label"
+  top: "loss"
+  softmax_param {
+    axis: 2
+  }
+}
+layer {
+  name: "accuracy"
+  type: "Accuracy"
+  bottom: "fc8-final"
+  bottom: "reshape-label"
+  top: "accuracy"
+  accuracy_param {
+    axis: 2
+  }
 }

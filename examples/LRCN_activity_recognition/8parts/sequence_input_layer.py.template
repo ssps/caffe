@@ -20,17 +20,20 @@ from multiprocessing import Pool
 from threading import Thread
 import skimage.io
 import copy
+import traceback
 
 flow_frames = 'flow_images/'
-RGB_frames = 'frames/'
+RGB_frames = 'frames-local/'
+# RGB_frames = 'frames-panfs/'
 train_video_list = 'ucf101_split1_trainVideos.txt.$'
 test_video_list = 'ucf101_split1_testVideos.txt.$'
-test_frames = 16 
-train_frames = 16   # Number of frames per video
+num_frames = 128
+test_frames = num_frames
+train_frames = num_frames   # Number of frames per video
 # test_buffer = 3
-test_buffer = 12
+test_buffer = 1
 # train_buffer = 24
-train_buffer = 12   # Number of videos
+train_buffer = 1   # Number of videos
 
 def processImageCrop(im_info, transformer, flow):
   im_path = im_info[0]
@@ -90,15 +93,23 @@ class sequenceGeneratorVideo(object):
       im_crop.extend([(r0, r1, r0+video_crop[0], r1+video_crop[1])]*self.clip_length)     
       f = random.randint(0,1)
       im_flip.extend([f]*self.clip_length)
-      rand_frame = int(random.random()*(self.video_dict[key]['num_frames']-self.clip_length)+1+1)
-      frames = []
+      if self.video_dict[key]['num_frames'] >= self.clip_length:
+        rand_frame = int(random.random()*(self.video_dict[key]['num_frames']-self.clip_length)+1)
+        frames = []
+        for i in range(rand_frame,rand_frame+self.clip_length):
+          frames.append(self.video_dict[key]['frames'] %i)
+        im_paths.extend(frames)
+      else:
+        # In case num_frames is smaller than video length
+        frames = []
+        for i in range(1,self.video_dict[key]['num_frames']+1):
+          frames.append(self.video_dict[key]['frames'] %i)
+        for n in range(self.clip_length-self.video_dict[key]['num_frames']):
+          # Fill with the last frame
+          i = self.video_dict[key]['num_frames']
+          frames.append(self.video_dict[key]['frames'] %i)
+        im_paths.extend(frames)
 
-      for i in range(rand_frame,rand_frame+self.clip_length):
-        frames.append(self.video_dict[key]['frames'] %i)
-     
-      im_paths.extend(frames) 
-    
-    
     im_info = zip(im_paths,im_crop, im_reshape, im_flip)
 
     self.idx += self.buffer_size
@@ -108,18 +119,39 @@ class sequenceGeneratorVideo(object):
     return label_r, im_info
   
 def advance_batch(result, sequence_generator, image_processor, pool):
-  
+  try:
     label_r, im_info = sequence_generator()
     tmp = image_processor(im_info[0])
     result['data'] = pool.map(image_processor, im_info)
     result['label'] = label_r
     cm = np.ones(len(label_r))
-    cm[0::16] = 0
+    cm[0::num_frames] = 0
     result['clip_markers'] = cm
     # print "result['data']:"
     # print result['data']
     # print "result['label']:"
     # print result['label']
+  except IndexError:
+    exc_type, exc_value, exc_traceback = sys.exc_info()
+    print "*** print_tb:"
+    traceback.print_tb(exc_traceback, limit=1, file=sys.stdout)
+    print "*** print_exception:"
+    traceback.print_exception(exc_type, exc_value, exc_traceback,
+                              limit=2, file=sys.stdout)
+    print "*** print_exc:"
+    traceback.print_exc()
+    print "*** format_exc, first and last line:"
+    formatted_lines = traceback.format_exc().splitlines()
+    print formatted_lines[0]
+    print formatted_lines[-1]
+    print "*** format_exception:"
+    print repr(traceback.format_exception(exc_type, exc_value,
+                                          exc_traceback))
+    print "*** extract_tb:"
+    print repr(traceback.extract_tb(exc_traceback))
+    print "*** format_tb:"
+    print repr(traceback.format_tb(exc_traceback))
+    print "*** tb_lineno:", exc_traceback.tb_lineno
 
 class BatchAdvancer():
     def __init__(self, result, sequence_generator, image_processor, pool):
@@ -228,6 +260,7 @@ class videoRead(caffe.Layer):
       self.join_worker() 
 
     #rearrange the data: The LSTM takes inputs as [video0_frame0, video1_frame0,...] but the data is currently arranged as [video0_frame0, video0_frame1, ...]
+    assert 'data' in self.thread_result.keys()
     new_result_data = [None]*len(self.thread_result['data']) 
     new_result_label = [None]*len(self.thread_result['label']) 
     new_result_cm = [None]*len(self.thread_result['clip_markers'])
