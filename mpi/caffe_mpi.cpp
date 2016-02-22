@@ -229,7 +229,8 @@ int train() {
 
   LOG(INFO) << "Starting Optimization";
   shared_ptr<caffe::Solver<float> >
-    solver(caffe::SolverRegistry<float>::CreateSolver(solver_param));
+    solver(caffe::SolverRegistry<float>::CreateSolver(
+        solver_param, &ps_config));
 
   if (FLAGS_snapshot.size()) {
     LOG(INFO) << "Resuming from " << FLAGS_snapshot;

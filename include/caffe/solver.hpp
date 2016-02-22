@@ -142,7 +142,7 @@ class Solver {
       const SolverParameter& param, const Solver<Dtype>* root_solver = NULL);
   explicit Solver(
       const string& param_file, const Solver<Dtype>* root_solver = NULL);
-  explicit Solver(const SolverParameter& param, const PsConfig& ps_config);
+  explicit Solver(const SolverParameter& param, const PsConfig *ps_config);
   void Init(const SolverParameter& param);
   void InitTrainNet();
   void InitTestNets();
@@ -266,7 +266,7 @@ class SGDSolver : public Solver<Dtype> {
   explicit SGDSolver(
       const string& param_file, const Solver<Dtype>* root_solver = NULL)
       : Solver<Dtype>(param_file, root_solver) { PreSolve(); }
-  explicit SGDSolver(const SolverParameter& param, const PsConfig& ps_config)
+  explicit SGDSolver(const SolverParameter& param, const PsConfig *ps_config)
       : Solver<Dtype>(param, ps_config) { PreSolve(); }
 
   const vector<shared_ptr<Blob<Dtype> > >& history() { return history_; }

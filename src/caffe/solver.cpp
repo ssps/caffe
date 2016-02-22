@@ -48,8 +48,8 @@ Solver<Dtype>::Solver(const SolverParameter& param, const Solver* root_solver)
 }
 
 template <typename Dtype>
-Solver<Dtype>::Solver(const SolverParameter& param, const PsConfig& ps_config)
-    : ps_config_(ps_config), net_(), callbacks_(), root_solver_(NULL),
+Solver<Dtype>::Solver(const SolverParameter& param, const PsConfig *ps_config)
+    : ps_config_(*ps_config), net_(), callbacks_(), root_solver_(NULL),
       requested_early_exit_(false) {
   Init(param);
 }
@@ -718,6 +718,7 @@ void Solver<float>::InitPs() {
 
   /* Initialize LazyTable */
   ps_config_.lt_config.num_tables = num_tables;
+  CHECK(ps_config_.lt_config.host_list.size());
   ps_ = make_shared<LazyTableModule>(
       ps_config_.worker_id, ps_config_.lt_config);
   ps_->thread_start();
