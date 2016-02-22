@@ -4,21 +4,20 @@ import glob
 import os
 import h5py
 import argparse
-import hickle as hkl
 import pdb 
 import time
 caffe_root = '../../'
 sys.path.insert(0, '../../python/')
 import caffe
 caffe.set_mode_gpu()
-caffe.set_device(1)
+caffe.set_device(0)
 from multiprocessing import Pool
 
 def evaluate_lstm(model_weights, h5_file_list, model='deploy_lstm.prototxt'):
 
   num_frames = 16
   stride = 8
-  batch_size = 500
+  batch_size = 50
   
   net = caffe.Net(model, model_weights , caffe.TEST) 
   split = 1
@@ -190,7 +189,7 @@ def extract_features(model_weights, flow=False, split=1, save_folder='extracted_
     for frame in sorted(frames):
       data.append(image_processor(frame))
   
-    min_batch = 400 
+    min_batch = 200
     video_key = video.split('/')[-1] 
   
     features[video_key] = np.zeros((len(data), feature_size)) 
