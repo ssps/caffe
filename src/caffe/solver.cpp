@@ -950,11 +950,22 @@ void SGDSolver<float>::InitPsValues() {
   if (ps_config_.no_ps) {
     return;
   }
+
+  bool print_ = false;
+  // bool print_ = ps_config_.worker_id == 0;
+
   vector<shared_ptr<Layer<float> > >& layers = this->net_->layers_;
   vector<bool>& layer_need_backward = this->net_->layer_need_backward_;
+  vector<string>& layer_names = this->net_->layer_names_;
   /* Set initial parameter values */
+  if (print_) {
+    LOG(INFO) << "Set initial parameter values";
+  }
   for (int layer_id = 0; layer_id < layer_infos_.size(); layer_id++) {
     shared_ptr<Layer<float> >& layer = layers[layer_id];
+    if (print_) {
+      LOG(INFO) << "Layer " << layer_names[layer_id];
+    }
     LayerInfo& layer_info = layer_infos_[layer_id];
     LayerHandles& layer_handles = layer_info.layer_handles[0];
     if (!layer_info.param_infos.size()) {
@@ -1012,10 +1023,15 @@ void SGDSolver<float>::InitPsValues() {
       }
     }
   }
-  /* Set initial updates history values */
+  if (print_) {
+    LOG(INFO) << "Set initial updates history values";
+  }
   for (int layer_id = 0; layer_id < layer_infos_.size(); layer_id++) {
     LayerInfo& layer_info = layer_infos_[layer_id];
     LayerHandles& layer_handles = layer_info.layer_handles[0];
+    if (print_) {
+      LOG(INFO) << "Layer " << layer_names[layer_id];
+    }
     if (!layer_info.param_infos.size() || !layer_need_backward[layer_id]) {
       continue;
     }
@@ -1031,6 +1047,7 @@ void SGDSolver<float>::InitPsValues() {
       int global_param_id =
           layer_info.param_infos[param_id].global_param_id;
       shared_ptr<Blob<float> >& updates_history = history_[global_param_id];
+      CHECK(!updates_history->check_gpu_data());
       bool change_head = false;
           /* "false" means that we will keep the head to be CPU_DATA.
            * We want to keep what's currently in CPU memory */
@@ -2028,10 +2045,13 @@ void SGDSolver<Dtype>::PreSolve() {
   temp_.clear();
   for (int i = 0; i < net_params.size(); ++i) {
     const vector<int>& shape = net_params[i]->shape();
-    /* Cui: TODO: do we really need these? */
     history_.push_back(shared_ptr<Blob<Dtype> >(new Blob<Dtype>(shape)));
+    /* Allocate CPU memory and zerofy the data */
+    history_[history_.size()-1]->mutable_cpu_data();
     update_.push_back(shared_ptr<Blob<Dtype> >(new Blob<Dtype>(shape)));
+    update_[update_.size()-1]->mutable_cpu_data();
     temp_.push_back(shared_ptr<Blob<Dtype> >(new Blob<Dtype>(shape)));
+    temp_[temp_.size()-1]->mutable_cpu_data();
   }
   /* I assume the values will be zerofied on allocation (in SyncedMemory)*/
 }

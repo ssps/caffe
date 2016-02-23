@@ -13,13 +13,15 @@ namespace caffe {
 // but might be more significant for parallel training. Most importantly,
 // it improved stability for large models on many GPUs.
 inline void CaffeMallocHost(void** ptr, size_t size, bool* use_cuda) {
-#ifndef CPU_ONLY
-  if (Caffe::mode() == Caffe::GPU) {
-    CUDA_CHECK(cudaMallocHost(ptr, size));
-    *use_cuda = true;
-    return;
-  }
-#endif
+// #ifndef CPU_ONLY
+  // if (Caffe::mode() == Caffe::GPU) {
+    // CUDA_CHECK(cudaMallocHost(ptr, size));
+    // *use_cuda = true;
+    // return;
+  // }
+// #endif
+  /* Cui: Caffe always allocates CPU memory using malloc,
+   * because we want to save the pinned CPU memory for LazyTable. */
   *ptr = malloc(size);
   *use_cuda = false;
   CHECK(*ptr) << "host allocation of size " << size << " failed";
@@ -53,11 +55,11 @@ class SyncedMemory {
         own_cpu_data_(false), cpu_malloc_use_cuda_(false), own_gpu_data_(false),
         gpu_device_(-1) {}
   ~SyncedMemory();
-  const void* cpu_data();
   void set_cpu_data(void* data);
-  void set_gpu_data(void* data, bool change_head);
-  const void* gpu_data();
   void set_gpu_data(void* data);
+  void set_gpu_data(void* data, bool change_head);
+  const void* cpu_data();
+  const void* gpu_data();
   void* mutable_cpu_data();
   void* mutable_gpu_data();
   const void* check_cpu_data() const;

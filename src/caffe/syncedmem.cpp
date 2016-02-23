@@ -62,7 +62,6 @@ inline void SyncedMemory::to_gpu() {
     }
     caffe_gpu_memset(size_, 0, gpu_ptr_);
     head_ = HEAD_AT_GPU;
-    own_gpu_data_ = true;
     break;
   case HEAD_AT_CPU:
     if (gpu_ptr_ == NULL) {
@@ -131,6 +130,10 @@ void SyncedMemory::set_gpu_data(void* data, bool change_head) {
   }
 }
 
+void SyncedMemory::set_gpu_data(void* data) {
+  CHECK(0) << "This function is not supported";
+}
+
 const void* SyncedMemory::cpu_data() {
   to_cpu();
   return (const void*)cpu_ptr_;
@@ -143,26 +146,6 @@ const void* SyncedMemory::gpu_data() {
 #else
   NO_GPU;
   return NULL;
-#endif
-}
-
-void SyncedMemory::set_gpu_data(void* data) {
-#ifndef CPU_ONLY
-  CHECK(data);
-  if (own_gpu_data_) {
-    int initial_device;
-    cudaGetDevice(&initial_device);
-    if (gpu_device_ != -1) {
-      CUDA_CHECK(cudaSetDevice(gpu_device_));
-    }
-    CUDA_CHECK(cudaFree(gpu_ptr_));
-    cudaSetDevice(initial_device);
-  }
-  gpu_ptr_ = data;
-  head_ = HEAD_AT_GPU;
-  own_gpu_data_ = false;
-#else
-  NO_GPU;
 #endif
 }
 
