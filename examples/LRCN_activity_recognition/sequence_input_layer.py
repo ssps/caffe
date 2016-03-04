@@ -23,10 +23,10 @@ import copy
 
 flow_frames = 'flow_images/'
 RGB_frames = 'frames/'
-test_frames = 16 
-train_frames = 16
-test_buffer = 2
-train_buffer = 2
+test_frames = 32 
+train_frames = 32
+test_buffer = 1
+train_buffer = 1
 
 def processImageCrop(im_info, transformer, flow):
   im_path = im_info[0]
