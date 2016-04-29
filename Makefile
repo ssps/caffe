@@ -398,9 +398,11 @@ LIBRARY_DIRS += $(BLAS_LIB)
 LIBRARY_DIRS += $(LIB_BUILD_DIR)
 
 # Adding GeePS library
+LIBRARIES += boost_system
+LIBRARIES += boost_program_options
 LIBRARIES += geeps
 LIBRARY_DIRS += ../../build
-INCLUDE_DIRS += ../../src/include
+INCLUDE_DIRS += ../../include
 
 # Automatic dependency generation (nvcc is handled separately)
 CXXFLAGS += -MMD -MP

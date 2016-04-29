@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "boost/algorithm/string.hpp"
+#include "geeps.hpp"
 #include "caffe/caffe.hpp"
 
 namespace po = boost::program_options;
@@ -25,8 +26,6 @@ using caffe::Timer;
 using caffe::vector;
 
 DEFINE_int32(worker_id, 0,
-    "");
-DEFINE_int32(num_workers, 1,
     "");
 DEFINE_int32(gpu, -1,
     "Run in GPU mode on given device ID.");
@@ -165,18 +164,21 @@ void parse_config_file(caffe::PsConfig& ps_config) {
      po::value<int>(&(ps_config.layers_per_table))
      ->default_value(1),
      "")
+    ("restore_snapshot",
+     po::value<string>(&(ps_config.snapshot_name))
+     ->default_value(""),
+     "")
+    ("keep_momentum",
+     po::value<int>(&(ps_config.keep_momentum))
+     ->default_value(1),
+     "")
+    ("debug",
+     po::value<int>(&(ps_config.debug))
+     ->default_value(0),
+     "")
     ("log_interval",
      po::value<int>(&(ps_config.geeps_config.log_interval))
      ->default_value(0),
-     "")
-    ("output_dir",
-     po::value<string>(&(ps_config.geeps_config.output_dir)),
-     "")
-    ("start_clock",
-     po::value<int>(&(ps_config.geeps_config.start_clock))->default_value(0),
-     "")
-    ("local_opt",
-     po::value<uint32_t>(&(ps_config.geeps_config.local_opt))->default_value(0),
      "");
   std::ifstream config_in(FLAGS_ps_config.c_str());
   CHECK(config_in);
@@ -189,7 +191,6 @@ void parse_config_file(caffe::PsConfig& ps_config) {
 // Train / Finetune a model.
 int train() {
   // Cui: change solver file name according to the worker_id
-  int num_workers = FLAGS_num_workers;
   int worker_id = FLAGS_worker_id;
   FLAGS_solver = (boost::format("%s.%i") % FLAGS_solver % worker_id).str();
   LOG(INFO) << "Use solver " << FLAGS_solver;
@@ -221,18 +222,22 @@ int train() {
 
   /* Cui: prepare PS config */
   caffe::PsConfig ps_config;
-  ps_config.num_workers = num_workers;
-  ps_config.worker_id = worker_id;
   parse_config_file(ps_config);
-  CHECK_EQ(num_workers, ps_config.geeps_config.host_list.size());
+  ps_config.num_workers = ps_config.geeps_config.host_list.size();
+  CHECK_LT(worker_id, ps_config.num_workers);
+  ps_config.worker_id = worker_id;
 
   LOG(INFO) << "Starting Optimization";
   shared_ptr<caffe::Solver<float> >
-    solver(caffe::GetSolver<float>(solver_param, ps_config));
+    solver(caffe::SolverRegistry<float>::CreateSolver(
+        solver_param, &ps_config));
 
   if (FLAGS_snapshot.size()) {
-    LOG(INFO) << "Resuming from " << FLAGS_snapshot;
-    solver->Solve(FLAGS_snapshot);
+    ps_config.snapshot_name = FLAGS_snapshot;
+  }
+  if (ps_config.snapshot_name.size()) {
+    LOG(INFO) << "Resuming from " << ps_config.snapshot_name;
+    solver->Solve(ps_config.snapshot_name);
   } else if (FLAGS_weights.size()) {
     CopyLayers(&*solver, FLAGS_weights);
     solver->Solve();
