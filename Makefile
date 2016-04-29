@@ -397,11 +397,10 @@ LIBRARY_DIRS += $(BLAS_LIB)
 
 LIBRARY_DIRS += $(LIB_BUILD_DIR)
 
-# Adding LazyTable library
-LIBRARIES += lazytablemodule_shared
-# LIBRARIES += lazytablemodule
-LIBRARY_DIRS += ../../flat-map
-INCLUDE_DIRS += ../../lazy-table-module/include
+# Adding GeePS library
+LIBRARIES += geeps
+LIBRARY_DIRS += ../../build
+INCLUDE_DIRS += ../../src/include
 
 # Automatic dependency generation (nvcc is handled separately)
 CXXFLAGS += -MMD -MP
@@ -510,7 +509,7 @@ $(PY$(PROJECT)_SO): $(PY$(PROJECT)_SRC) $(PY$(PROJECT)_HXX) | $(DYNAMIC_NAME)
 	$(Q)$(CXX) -shared -o $@ $(PY$(PROJECT)_SRC) \
 		-o $@ $(LINKFLAGS) -l$(LIBRARY_NAME) $(PYTHON_LDFLAGS) \
 		-Wl,-rpath,$(ORIGIN)/../../build/lib \
-		-Wl,-rpath,$(ORIGIN)/../../../../flat-map
+		-Wl,-rpath,$(ORIGIN)/../../../../build
 
 mat$(PROJECT): mat
 
@@ -607,7 +606,7 @@ $(TEST_ALL_BIN): $(TEST_MAIN_SRC) $(TEST_OBJS) $(GTEST_OBJ) \
 	$(Q)$(CXX) $(TEST_MAIN_SRC) $(TEST_OBJS) $(GTEST_OBJ) \
 		-o $@ $(LINKFLAGS) $(LDFLAGS) -l$(LIBRARY_NAME) \
 		-Wl,-rpath,$(ORIGIN)/../lib \
-		-Wl,-rpath,$(ORIGIN)/../../../../flat-map
+		-Wl,-rpath,$(ORIGIN)/../../../../build
 
 $(TEST_CU_BINS): $(TEST_BIN_DIR)/%.testbin: $(TEST_CU_BUILD_DIR)/%.o \
 	$(GTEST_OBJ) | $(DYNAMIC_NAME) $(TEST_BIN_DIR)
@@ -615,7 +614,7 @@ $(TEST_CU_BINS): $(TEST_BIN_DIR)/%.testbin: $(TEST_CU_BUILD_DIR)/%.o \
 	$(Q)$(CXX) $(TEST_MAIN_SRC) $< $(GTEST_OBJ) \
 		-o $@ $(LINKFLAGS) $(LDFLAGS) -l$(LIBRARY_NAME) \
 		-Wl,-rpath,$(ORIGIN)/../lib \
-		-Wl,-rpath,$(ORIGIN)/../../../../flat-map
+		-Wl,-rpath,$(ORIGIN)/../../../../build
 
 $(TEST_CXX_BINS): $(TEST_BIN_DIR)/%.testbin: $(TEST_CXX_BUILD_DIR)/%.o \
 	$(GTEST_OBJ) | $(DYNAMIC_NAME) $(TEST_BIN_DIR)
@@ -623,7 +622,7 @@ $(TEST_CXX_BINS): $(TEST_BIN_DIR)/%.testbin: $(TEST_CXX_BUILD_DIR)/%.o \
 	$(Q)$(CXX) $(TEST_MAIN_SRC) $< $(GTEST_OBJ) \
 		-o $@ $(LINKFLAGS) $(LDFLAGS) -l$(LIBRARY_NAME) \
 		-Wl,-rpath,$(ORIGIN)/../lib \
-		-Wl,-rpath,$(ORIGIN)/../../../../flat-map
+		-Wl,-rpath,$(ORIGIN)/../../../../build
 
 # Target for extension-less symlinks to tool binaries with extension '*.bin'.
 $(TOOL_BUILD_DIR)/%: $(TOOL_BUILD_DIR)/%.bin | $(TOOL_BUILD_DIR)
@@ -634,13 +633,13 @@ $(TOOL_BINS): %.bin : %.o | $(DYNAMIC_NAME)
 	@ echo CXX/LD -o $@
 	$(Q)$(CXX) $< -o $@ $(LINKFLAGS) -l$(LIBRARY_NAME) $(LDFLAGS) \
 		-Wl,-rpath,$(ORIGIN)/../lib \
-		-Wl,-rpath,$(ORIGIN)/../../../../flat-map
+		-Wl,-rpath,$(ORIGIN)/../../../../build
 
 $(EXAMPLE_BINS): %.bin : %.o | $(DYNAMIC_NAME)
 	@ echo CXX/LD -o $@
 	$(Q)$(CXX) $< -o $@ $(LINKFLAGS) -l$(LIBRARY_NAME) $(LDFLAGS) \
-		-Wl,-rpath,$(ORIGIN)/../lib \
-		-Wl,-rpath,$(ORIGIN)/../../../../flat-map
+		-Wl,-rpath,$(ORIGIN)/../../lib \
+		-Wl,-rpath,$(ORIGIN)/../../../../../build
 
 proto: $(PROTO_GEN_CC) $(PROTO_GEN_HEADER)
 

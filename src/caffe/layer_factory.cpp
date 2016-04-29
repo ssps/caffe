@@ -89,6 +89,7 @@ shared_ptr<Layer<Dtype> > GetPoolingLayer(const LayerParameter& param) {
     if (param.top_size() > 1) {
       LOG(INFO) << "cuDNN does not support multiple tops. "
                 << "Using Caffe's own pooling layer.";
+      CHECK_EQ(param.pooling_param().pool(), PoolingParameter_PoolMethod_MAX);
       return shared_ptr<Layer<Dtype> >(new PoolingLayer<Dtype>(param));
     }
     // CuDNN assumes layers are not being modified in place, thus

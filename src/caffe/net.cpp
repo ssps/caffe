@@ -120,10 +120,12 @@ void Net<Dtype>::Init(const NetParameter& in_param) {
     for (int top_id = 0; top_id < num_top; ++top_id) {
       if ((layer_param.type() == "LRN" && top_id > 0)
           || (layer_param.type() == "Pooling" && top_id > 0)
+          || (layer_param.type() == "BatchNorm" && top_id > 0)
           || (layer_param.type() == "Dropout" && top_id > 0)) {
-        /* top[1] of the LRN layer is used as the intermediate scale_ data;
-         * top[1] of the Pooling layer is used as the intermediate mask_ data;
-         * top[1] of the Pooling layer is used as intermediate data;
+        /* top[1] of LRN layer is used as the intermediate scale_ data;
+         * top[1] of Pooling layer is used as the intermediate mask_ data;
+         * top[1] and top[2] of BatchNorm layer is used as intermediate data;
+         * top[1] of Dropout layer is used as intermediate data;
          * So we don't add them to available_blobs */
         AppendTop(param, layer_id, top_id, NULL, &blob_name_to_idx);
       } else {

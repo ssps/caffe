@@ -14,26 +14,29 @@ void BatchNormLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
   use_global_stats_ = this->phase_ == TEST;
   if (param.has_use_global_stats())
     use_global_stats_ = param.use_global_stats();
+  /* Cui: I don't want to use the global stats */
+  use_global_stats_ = false;
   if (bottom[0]->num_axes() == 1)
     channels_ = 1;
   else
     channels_ = bottom[0]->shape(1);
   eps_ = param.eps();
-  if (this->blobs_.size() > 0) {
-    LOG(INFO) << "Skipping parameter initialization";
-  } else {
-    this->blobs_.resize(3);
-    vector<int> sz;
-    sz.push_back(channels_);
-    this->blobs_[0].reset(new Blob<Dtype>(sz));
-    this->blobs_[1].reset(new Blob<Dtype>(sz));
-    sz[0]=1;
-    this->blobs_[2].reset(new Blob<Dtype>(sz));
-    for (int i = 0; i < 3; ++i) {
-      caffe_set(this->blobs_[i]->count(), Dtype(0),
-                this->blobs_[i]->mutable_cpu_data());
-    }
-  }
+  /* Cui: I don't want to keep the running average of mean and variance */
+  // if (this->blobs_.size() > 0) {
+    // LOG(INFO) << "Skipping parameter initialization";
+  // } else {
+    // this->blobs_.resize(3);
+    // vector<int> sz;
+    // sz.push_back(channels_);
+    // this->blobs_[0].reset(new Blob<Dtype>(sz));
+    // this->blobs_[1].reset(new Blob<Dtype>(sz));
+    // sz[0]=1;
+    // this->blobs_[2].reset(new Blob<Dtype>(sz));
+    // for (int i = 0; i < 3; ++i) {
+      // caffe_set(this->blobs_[i]->count(), Dtype(0),
+                // this->blobs_[i]->mutable_cpu_data());
+    // }
+  // }
 }
 
 template <typename Dtype>
@@ -47,8 +50,10 @@ void BatchNormLayer<Dtype>::Reshape(const vector<Blob<Dtype>*>& bottom,
   sz.push_back(channels_);
   mean_.Reshape(sz);
   variance_.Reshape(sz);
-  temp_.ReshapeLike(*bottom[0]);
-  x_norm_.ReshapeLike(*bottom[0]);
+  // temp_.ReshapeLike(*bottom[0]);
+  // x_norm_.ReshapeLike(*bottom[0]);
+  top[1]->ReshapeLike(*bottom[0]);    /* used as temp_ */
+  top[2]->ReshapeLike(*bottom[0]);    /* used as x_norm_ */
   sz[0]=bottom[0]->shape(0);
   batch_sum_multiplier_.Reshape(sz);
 
@@ -79,11 +84,16 @@ void BatchNormLayer<Dtype>::Forward_cpu(const vector<Blob<Dtype>*>& bottom,
   int num = bottom[0]->shape(0);
   int spatial_dim = bottom[0]->count()/(bottom[0]->shape(0)*channels_);
 
+  /* Cui: use top[1] and top[2] for temp and x_norm */
+  Blob<Dtype>& temp = *top[1];
+  Blob<Dtype>& x_norm = *top[2];
+
   if (bottom[0] != top[0]) {
     caffe_copy(bottom[0]->count(), bottom_data, top_data);
   }
 
   if (use_global_stats_) {
+    CHECK(0);
     // use the stored mean/variance estimates.
     const Dtype scale_factor = this->blobs_[2]->cpu_data()[0] == 0 ?
         0 : 1 / this->blobs_[2]->cpu_data()[0];
@@ -113,9 +123,9 @@ void BatchNormLayer<Dtype>::Forward_cpu(const vector<Blob<Dtype>*>& bottom,
   if (!use_global_stats_) {
     // compute variance using var(X) = E((X-EX)^2)
     caffe_powx(top[0]->count(), top_data, Dtype(2),
-        temp_.mutable_cpu_data());  // (X-EX)^2
+        temp.mutable_cpu_data());  // (X-EX)^2
     caffe_cpu_gemv<Dtype>(CblasNoTrans, channels_ * num, spatial_dim,
-        1. / (num * spatial_dim), temp_.cpu_data(),
+        1. / (num * spatial_dim), temp.cpu_data(),
         spatial_sum_multiplier_.cpu_data(), 0.,
         num_by_chans_.mutable_cpu_data());
     caffe_cpu_gemv<Dtype>(CblasTrans, num, channels_, 1.,
@@ -123,15 +133,16 @@ void BatchNormLayer<Dtype>::Forward_cpu(const vector<Blob<Dtype>*>& bottom,
         variance_.mutable_cpu_data());  // E((X_EX)^2)
 
     // compute and save moving average
-    this->blobs_[2]->mutable_cpu_data()[0] *= moving_average_fraction_;
-    this->blobs_[2]->mutable_cpu_data()[0] += 1;
-    caffe_cpu_axpby(mean_.count(), Dtype(1), mean_.cpu_data(),
-        moving_average_fraction_, this->blobs_[0]->mutable_cpu_data());
-    int m = bottom[0]->count()/channels_;
-    Dtype bias_correction_factor = m > 1 ? Dtype(m)/(m-1) : 1;
-    caffe_cpu_axpby(variance_.count(), bias_correction_factor,
-        variance_.cpu_data(), moving_average_fraction_,
-        this->blobs_[1]->mutable_cpu_data());
+    /* Cui: I don't want to use the global stats */
+    // this->blobs_[2]->mutable_cpu_data()[0] *= moving_average_fraction_;
+    // this->blobs_[2]->mutable_cpu_data()[0] += 1;
+    // caffe_cpu_axpby(mean_.count(), Dtype(1), mean_.cpu_data(),
+        // moving_average_fraction_, this->blobs_[0]->mutable_cpu_data());
+    // int m = bottom[0]->count()/channels_;
+    // Dtype bias_correction_factor = m > 1 ? Dtype(m)/(m-1) : 1;
+    // caffe_cpu_axpby(variance_.count(), bias_correction_factor,
+        // variance_.cpu_data(), moving_average_fraction_,
+        // this->blobs_[1]->mutable_cpu_data());
   }
 
   // normalize variance
@@ -145,12 +156,12 @@ void BatchNormLayer<Dtype>::Forward_cpu(const vector<Blob<Dtype>*>& bottom,
       num_by_chans_.mutable_cpu_data());
   caffe_cpu_gemm<Dtype>(CblasNoTrans, CblasNoTrans, channels_ * num,
       spatial_dim, 1, 1., num_by_chans_.cpu_data(),
-      spatial_sum_multiplier_.cpu_data(), 0., temp_.mutable_cpu_data());
-  caffe_div(temp_.count(), top_data, temp_.cpu_data(), top_data);
+      spatial_sum_multiplier_.cpu_data(), 0., temp.mutable_cpu_data());
+  caffe_div(temp.count(), top_data, temp.cpu_data(), top_data);
   // TODO(cdoersch): The caching is only needed because later in-place layers
   //                 might clobber the data.  Can we skip this if they won't?
-  caffe_copy(x_norm_.count(), top_data,
-      x_norm_.mutable_cpu_data());
+  caffe_copy(x_norm.count(), top_data,
+      x_norm.mutable_cpu_data());
 }
 
 template <typename Dtype>
@@ -158,18 +169,22 @@ void BatchNormLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
     const vector<bool>& propagate_down,
     const vector<Blob<Dtype>*>& bottom) {
   const Dtype* top_diff;
+  /* Cui: use top[1] and top[2] for temp and x_norm */
+  Blob<Dtype>& temp = *top[1];
+  Blob<Dtype>& x_norm = *top[2];
+
   if (bottom[0] != top[0]) {
     top_diff = top[0]->cpu_diff();
   } else {
-    caffe_copy(x_norm_.count(), top[0]->cpu_diff(), x_norm_.mutable_cpu_diff());
-    top_diff = x_norm_.cpu_diff();
+    caffe_copy(x_norm.count(), top[0]->cpu_diff(), x_norm.mutable_cpu_diff());
+    top_diff = x_norm.cpu_diff();
   }
   Dtype* bottom_diff = bottom[0]->mutable_cpu_diff();
   if (use_global_stats_) {
-    caffe_div(temp_.count(), top_diff, temp_.cpu_data(), bottom_diff);
+    caffe_div(temp.count(), top_diff, temp.cpu_data(), bottom_diff);
     return;
   }
-  const Dtype* top_data = x_norm_.cpu_data();
+  const Dtype* top_data = x_norm.cpu_data();
   int num = bottom[0]->shape()[0];
   int spatial_dim = bottom[0]->count()/(bottom[0]->shape(0)*channels_);
   // if Y = (X-mean(X))/(sqrt(var(X)+eps)), then
@@ -185,7 +200,7 @@ void BatchNormLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
   // dimensions except the channels dimension where required.
 
   // sum(dE/dY \cdot Y)
-  caffe_mul(temp_.count(), top_data, top_diff, bottom_diff);
+  caffe_mul(temp.count(), top_data, top_diff, bottom_diff);
   caffe_cpu_gemv<Dtype>(CblasNoTrans, channels_ * num, spatial_dim, 1.,
       bottom_diff, spatial_sum_multiplier_.cpu_data(), 0.,
       num_by_chans_.mutable_cpu_data());
@@ -202,7 +217,7 @@ void BatchNormLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
       spatial_sum_multiplier_.cpu_data(), 0., bottom_diff);
 
   // sum(dE/dY \cdot Y) \cdot Y
-  caffe_mul(temp_.count(), top_data, bottom_diff, bottom_diff);
+  caffe_mul(temp.count(), top_data, bottom_diff, bottom_diff);
 
   // sum(dE/dY)-sum(dE/dY \cdot Y) \cdot Y
   caffe_cpu_gemv<Dtype>(CblasNoTrans, channels_ * num, spatial_dim, 1.,
@@ -221,12 +236,12 @@ void BatchNormLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
       spatial_sum_multiplier_.cpu_data(), 1., bottom_diff);
 
   // dE/dY - mean(dE/dY)-mean(dE/dY \cdot Y) \cdot Y
-  caffe_cpu_axpby(temp_.count(), Dtype(1), top_diff,
+  caffe_cpu_axpby(temp.count(), Dtype(1), top_diff,
       Dtype(-1. / (num * spatial_dim)), bottom_diff);
 
-  // note: temp_ still contains sqrt(var(X)+eps), computed during the forward
+  // note: temp still contains sqrt(var(X)+eps), computed during the forward
   // pass.
-  caffe_div(temp_.count(), bottom_diff, temp_.cpu_data(), bottom_diff);
+  caffe_div(temp.count(), bottom_diff, temp.cpu_data(), bottom_diff);
 }
 
 

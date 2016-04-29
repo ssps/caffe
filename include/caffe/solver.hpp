@@ -9,21 +9,24 @@
 #include "caffe/net.hpp"
 #include "caffe/solver_factory.hpp"
 
-#include "lazy-table-module.hpp"
+#include "geeps.hpp"
 
 namespace caffe {
 
 struct PsConfig {
-  bool no_ps;
   int worker_id;
   int num_workers;
   int slack;
   int batches_per_clock;
   int multi_table;
   int layers_per_table;
-  LazyTableConfig lt_config;
-  PsConfig() : no_ps(false), slack(0), batches_per_clock(1),
-      multi_table(1), layers_per_table(1) {}
+  string snapshot_name;
+  int keep_momentum;
+  int debug;
+  GeePsConfig geeps_config;
+  PsConfig() : slack(0), batches_per_clock(1),
+      multi_table(1), layers_per_table(1),
+      snapshot_name(""), keep_momentum(1) {}
 };
 
 struct RowAccessInfo {
@@ -199,7 +202,6 @@ class Solver {
 
  protected:
   // Make and apply the update value for the current iteration.
-  virtual void ApplyUpdate() = 0;
   virtual Dtype ForwardBackwardUsingPs(const vector<Blob<Dtype>* > & bottom,
       const shared_ptr<Net<Dtype> >& net, bool test, bool do_snapshot) = 0;
   virtual void InitSolverStateSnapshot() = 0;
@@ -219,7 +221,7 @@ class Solver {
   SolverParameter param_;
 
   PsConfig ps_config_;
-  shared_ptr<LazyTableModule> ps_;
+  shared_ptr<GeePs> ps_;
 
   vector<RowAccessInfo> imb_data_infos_;
   vector<RowAccessInfo> imb_diff_infos_;
@@ -274,7 +276,6 @@ class SGDSolver : public Solver<Dtype> {
  protected:
   void PreSolve();
   Dtype GetLearningRate();
-  virtual void ApplyUpdate();
   virtual Dtype ForwardBackwardUsingPs(const vector<Blob<Dtype>* > & bottom,
       const shared_ptr<Net<Dtype> >& net, bool test, bool do_snapshot);
   virtual void InitPsValues();
@@ -309,7 +310,6 @@ class WorkerSolver : public Solver<Dtype> {
       : Solver<Dtype>(param, root_solver) {}
 
  protected:
-  void ApplyUpdate() {}
   Dtype ForwardBackwardUsingPs(const vector<Blob<Dtype>* > & bottom,
       const shared_ptr<Net<Dtype> >& net, bool test, bool do_snapshot) {
     LOG(FATAL) << "Should not be called on worker solver.";

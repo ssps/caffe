@@ -51,7 +51,7 @@ class BatchNormLayer : public Layer<Dtype> {
 
   virtual inline const char* type() const { return "BatchNorm"; }
   virtual inline int ExactNumBottomBlobs() const { return 1; }
-  virtual inline int ExactNumTopBlobs() const { return 1; }
+  virtual inline int ExactNumTopBlobs() const { return 3; }
 
  protected:
   virtual void Forward_cpu(const vector<Blob<Dtype>*>& bottom,
@@ -63,7 +63,12 @@ class BatchNormLayer : public Layer<Dtype> {
   virtual void Backward_gpu(const vector<Blob<Dtype>*>& top,
      const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom);
 
-  Blob<Dtype> mean_, variance_, temp_, x_norm_;
+  Blob<Dtype> mean_;
+  Blob<Dtype> variance_;
+  // Blob<Dtype> temp_;
+      /* Cui: Use top[1] instead */
+  // Blob<Dtype> x_norm_;
+      /* Cui: Use top[2] instead */
   bool use_global_stats_;
   Dtype moving_average_fraction_;
   int channels_;

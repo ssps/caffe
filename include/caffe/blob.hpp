@@ -218,9 +218,11 @@ class Blob {
 
   const int* gpu_shape() const;
   void set_cpu_data(Dtype* data);
-  void set_gpu_data(Dtype* data, bool change_head);
+  void set_gpu_data(
+      Dtype* data, bool change_head, bool allow_reset_cpu_data = false);
   void set_cpu_diff(Dtype* diff);
-  void set_gpu_diff(Dtype* diff, bool change_head);
+  void set_gpu_diff(
+      Dtype* diff, bool change_head, bool allow_reset_cpu_data = false);
   const Dtype* cpu_data() const;
   const Dtype* gpu_data() const;
   const Dtype* cpu_diff() const;

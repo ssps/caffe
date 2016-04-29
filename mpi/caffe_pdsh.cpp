@@ -127,30 +127,30 @@ void parse_config_file(caffe::PsConfig& ps_config) {
      po::value<int>(&ps_config.slack),
      "")
     ("num_channels",
-     po::value<uint32_t>(&(ps_config.lt_config.num_comm_channels)),
+     po::value<uint32_t>(&(ps_config.geeps_config.num_comm_channels)),
      "")
     ("thread_cache_capacity",
-     po::value<int>(&(ps_config.lt_config.thread_cache_capacity))
+     po::value<int>(&(ps_config.geeps_config.thread_cache_capacity))
      ->default_value(-1),
      "")
     ("gpu_process_cache_capacity",
-     po::value<int>(&(ps_config.lt_config.gpu_process_cache_capacity))
+     po::value<int>(&(ps_config.geeps_config.gpu_process_cache_capacity))
      ->default_value(-1),
      "")
     ("gpu_local_storage_capacity",
-     po::value<int>(&(ps_config.lt_config.gpu_local_storage_capacity))
+     po::value<int>(&(ps_config.geeps_config.gpu_local_storage_capacity))
      ->default_value(-1),
      "")
     ("gpu_memory_capacity",
-     po::value<int>(&(ps_config.lt_config.gpu_memory_capacity))
+     po::value<int>(&(ps_config.geeps_config.gpu_memory_capacity))
      ->default_value(-1),
      "")
     ("read_my_writes",
-     po::value<int>(&(ps_config.lt_config.read_my_writes))
+     po::value<int>(&(ps_config.geeps_config.read_my_writes))
      ->default_value(0),
      "")
     ("pinned_cpu_memory",
-     po::value<int>(&(ps_config.lt_config.pinned_cpu_memory))
+     po::value<int>(&(ps_config.geeps_config.pinned_cpu_memory))
      ->default_value(0),
      "")
     ("batches_per_clock",
@@ -166,24 +166,24 @@ void parse_config_file(caffe::PsConfig& ps_config) {
      ->default_value(1),
      "")
     ("log_interval",
-     po::value<int>(&(ps_config.lt_config.log_interval))
+     po::value<int>(&(ps_config.geeps_config.log_interval))
      ->default_value(0),
      "")
     ("output_dir",
-     po::value<string>(&(ps_config.lt_config.output_dir)),
+     po::value<string>(&(ps_config.geeps_config.output_dir)),
      "")
     ("start_clock",
-     po::value<int>(&(ps_config.lt_config.start_clock))->default_value(0),
+     po::value<int>(&(ps_config.geeps_config.start_clock))->default_value(0),
      "")
     ("local_opt",
-     po::value<uint32_t>(&(ps_config.lt_config.local_opt))->default_value(0),
+     po::value<uint32_t>(&(ps_config.geeps_config.local_opt))->default_value(0),
      "");
   std::ifstream config_in(FLAGS_ps_config.c_str());
   CHECK(config_in);
   po::variables_map vm;
   po::store(po::parse_config_file(config_in, desc), vm);
   po::notify(vm);
-  parse_hostfile(hostfile, ps_config.lt_config.host_list);
+  parse_hostfile(hostfile, ps_config.geeps_config.host_list);
 }
 
 // Train / Finetune a model.
@@ -224,7 +224,7 @@ int train() {
   ps_config.num_workers = num_workers;
   ps_config.worker_id = worker_id;
   parse_config_file(ps_config);
-  CHECK_EQ(num_workers, ps_config.lt_config.host_list.size());
+  CHECK_EQ(num_workers, ps_config.geeps_config.host_list.size());
 
   LOG(INFO) << "Starting Optimization";
   shared_ptr<caffe::Solver<float> >

@@ -84,8 +84,9 @@ void Blob<Dtype>::set_cpu_data(Dtype* data) {
 }
 
 template <typename Dtype>
-void Blob<Dtype>::set_gpu_data(Dtype* data, bool change_head) {
-  data_->set_gpu_data(data, change_head);
+void Blob<Dtype>::set_gpu_data(
+    Dtype* data, bool change_head, bool allow_reset_cpu_data) {
+  data_->set_gpu_data(data, change_head, allow_reset_cpu_data);
 }
 
 template <typename Dtype>
@@ -94,8 +95,9 @@ void Blob<Dtype>::set_cpu_diff(Dtype* diff) {
 }
 
 template <typename Dtype>
-void Blob<Dtype>::set_gpu_diff(Dtype* diff, bool change_head) {
-  diff_->set_gpu_data(diff, change_head);
+void Blob<Dtype>::set_gpu_diff(
+    Dtype* diff, bool change_head, bool allow_reset_cpu_data) {
+  diff_->set_gpu_data(diff, change_head, allow_reset_cpu_data);
 }
 
 template <typename Dtype>

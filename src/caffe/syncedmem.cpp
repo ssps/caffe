@@ -95,7 +95,8 @@ void SyncedMemory::set_cpu_data(void* data) {
   }
 }
 
-void SyncedMemory::set_gpu_data(void* data, bool change_head) {
+void SyncedMemory::set_gpu_data(
+    void* data, bool change_head, bool allow_reset_cpu_data) {
   // LOG(INFO) << "set_gpu_data for " << this;
   // LOG(INFO) << "data = " << data;
   // LOG(INFO) << "change_head = " << change_head;
@@ -117,7 +118,10 @@ void SyncedMemory::set_gpu_data(void* data, bool change_head) {
       head_ = HEAD_AT_GPU;
     } else {
       if (head_ == HEAD_AT_CPU) {
-        LOG(INFO) << "***WARNING: set_gpu_data(): cleaning up CPU data";
+        // LOG(INFO) << "***WARNING: set_gpu_data(): cleaning up CPU data";
+        if (!allow_reset_cpu_data) {
+          CHECK(0);
+        }
       }
       head_ = UNINITIALIZED;
     }
@@ -125,7 +129,8 @@ void SyncedMemory::set_gpu_data(void* data, bool change_head) {
     CHECK_NE(head_, HEAD_AT_GPU);
     CHECK_NE(head_, SYNCED);
     if (head_ == UNINITIALIZED) {
-      LOG(INFO) << "***WARNING: set_gpu_data(): no_change_head but no CPU data";
+      // LOG(INFO) << "***WARNING: set_gpu_data(): no_change_head but no CPU data";
+      CHECK(0);
     }
   }
 }

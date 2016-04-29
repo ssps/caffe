@@ -199,10 +199,6 @@ void Solver<Dtype>::InitTestNets() {
 
 template <>
 void Solver<float>::InitPs() {
-  if (ps_config_.no_ps) {
-    return;
-  }
-
   vector<shared_ptr<Layer<float> > >& layers = this->net_->layers_;
   vector<string>& layer_types = this->net_->layer_types_;
   vector<string>& layer_names = this->net_->layer_names_;
@@ -279,8 +275,6 @@ void Solver<float>::InitPs() {
   /* Decide row keys for intermediate data blobs */
   vector<shared_ptr<Blob<float> > >& imbs = this->net_->blobs_;
   imb_data_infos_.resize(imbs.size());
-  // LOG(INFO) << "imbs.size() = " << imbs.size();
-  // LOG(INFO) << "imb sizes:" << imbs.size();
   for (int imb_id = 0; imb_id < imbs.size(); imb_id++) {
     RowAccessInfo& imb_info = imb_data_infos_[imb_id];
     imb_info.num_vals = imbs[imb_id]->count();
@@ -305,29 +299,6 @@ void Solver<float>::InitPs() {
     imb_info.data_in_mem = false;
     imb_info.data_handle = -1;
   }
-
-  /* Count total size of params and imbs */
-  int input_size = 0;
-  int imb_size = 0;
-  int param_size = 0;
-  int update_size = 0;
-  for (int i = 0; i < imbs.size(); i++) {
-    if (i < 2) {
-      input_size += imbs[i]->count();
-    } else {
-      imb_size += imbs[i]->count();
-    }
-    /* Counting diffs */
-    imb_size += imbs[i]->count();
-  }
-  for (int i = 0; i < params.size(); i++) {
-    param_size += params[i]->count();
-    update_size += params[i]->count();
-    imb_size += params[i]->count();
-  }
-  cout << "Total sizes: " << endl;
-  cout << input_size << ',' << imb_size
-         << ',' << param_size << ',' << update_size << endl;
 
   /* Decide which intermediate blobs to access/release at each layer */
   vector<int>& net_output_blob_indices = this->net_->net_output_blob_indices_;
@@ -383,86 +354,29 @@ void Solver<float>::InitPs() {
         imb_diffs_used_fw[blob_id] = FetchKeep(false, true);
       }
       /* In the backward pass, use (fetch, no keep) the top data blobs
-       * only in ReLU, LRN, Pooling, Dropout,
+       * only in ReLU, LRN, Pooling, BatchNorm, Dropout,
        * and SoftmaxWithLoss layers */
       if (layer_types[layer_id] == "ReLU" ||
           layer_types[layer_id] == "LRN" ||
           layer_types[layer_id] == "Pooling" ||
+          layer_types[layer_id] == "BatchNorm" ||
           layer_types[layer_id] == "Dropout" ||
           layer_types[layer_id] == "SoftmaxWithLoss") {
         imbs_used_bw[blob_id] = FetchKeep(true, false);
       }
       /* In the backward pass, use (fetch, no keep) all top diff blobs,
-       * except for Data layers, top[1] of LRN layers,
-       * top[1] of Pooling layers, and top[1] of Dropout layers */
+       * except for Data layers, top[1] of LRN, Pooling layers, BatchNorm,
+       * and Dropout layers */
       if (layer_types[layer_id] == "Data" ||
           (layer_types[layer_id] == "LRN" && i > 0) ||
           (layer_types[layer_id] == "Pooling" && i > 0) ||
+          (layer_types[layer_id] == "BatchNorm" && i > 0) ||
           (layer_types[layer_id] == "Dropout" && i > 0)) {
         /* Do not use */
       } else {
         imb_diffs_used_bw[blob_id] = FetchKeep(true, false);
       }
     }
-    int total_count = 0;
-    for (IntSet::iterator i = imbs_used_fw.begin();
-         i != imbs_used_fw.end(); i++) {
-      int imb_id = i->first;
-      total_count += imbs[imb_id]->count();
-    }
-  }
-  cout << "\nForwardbackward per layer sizes:" << endl;
-  for (int layer_id = 0; layer_id < layers.size(); layer_id++) {
-    LayerInfo& layer_info = layer_infos_[layer_id];
-    int input_size = 0;
-    int imb_size = 0;
-    int param_size = 0;
-    int update_size = 0;
-    IntSet& imbs_used = layer_info.imbs_used_fw;
-    IntSet& imb_diffs_used = layer_info.imb_diffs_used_fw;
-    for (IntSet::iterator i = imbs_used.begin(); i != imbs_used.end(); i++) {
-      int imb_id = i->first;
-      if (imb_id < 2) {
-        input_size += imbs[imb_id]->count();
-      } else {
-        imb_size += imbs[imb_id]->count();
-      }
-    }
-    for (IntSet::iterator i = imb_diffs_used.begin();
-         i != imb_diffs_used.end(); i++) {
-      int imb_id = i->first;
-      imb_size += imbs[imb_id]->count();
-    }
-    param_size += layer_info.num_vals;
-    cout << layer_id << ',' << input_size << ',' << imb_size
-         << ',' << param_size << ',' << update_size << endl;
-  }
-  for (int layer_id = layer_infos_.size() - 1; layer_id >= 0; layer_id--) {
-    LayerInfo& layer_info = layer_infos_[layer_id];
-    int input_size = 0;
-    int imb_size = 0;
-    int param_size = 0;
-    int update_size = 0;
-    IntSet& imbs_used = layer_info.imbs_used_bw;
-    IntSet& imb_diffs_used = layer_info.imb_diffs_used_bw;
-    for (IntSet::iterator i = imbs_used.begin(); i != imbs_used.end(); i++) {
-      int imb_id = i->first;
-      if (imb_id < 2) {
-        input_size += imbs[imb_id]->count();
-      } else {
-        imb_size += imbs[imb_id]->count();
-      }
-    }
-    for (IntSet::iterator i = imb_diffs_used.begin();
-         i != imb_diffs_used.end(); i++) {
-      int imb_id = i->first;
-      imb_size += imbs[imb_id]->count();
-    }
-    param_size += layer_info.num_vals;
-    update_size += layer_info.num_vals;
-    imb_size += layer_info.num_vals;
-    cout << layer_id << ',' << input_size << ',' << imb_size
-         << ',' << param_size << ',' << update_size << endl;
   }
 
   /* Decide imbs to accesss/release in forward pass */
@@ -561,6 +475,7 @@ void Solver<float>::InitPs() {
       }
     }
   }
+  /* Decide imbs to accesss/release in backward pass */
   for (int layer_id = layer_infos_.size() - 1; layer_id >= 0; layer_id--) {
     if (!layer_need_backward[layer_id]) {
       LOG(INFO) << "Layer " << layer_names[layer_id] << " doesn't need backward";
@@ -641,61 +556,7 @@ void Solver<float>::InitPs() {
     CHECK(!imb_diff_infos_[i].data_in_mem) << "i = " << i;
   }
 
-  /* Print the size of imbs that need to be fetched */
-  cout << "\nSize of imbs that need to be fetched during forwardbackward:" << endl;
-  for (int layer_id = 0; layer_id < layer_infos_.size(); layer_id++) {
-    LayerInfo& layer_info = layer_infos_[layer_id];
-    int input_size = 0;
-    int imb_size = 0;
-    int param_size = 0;
-    int update_size = 0;
-    for (int i = 0; i < layer_info.imbs_to_access_fw.size(); i++) {
-      ImbInfo& imb_info = layer_info.imbs_to_access_fw[i];
-      int imb_id = imb_info.global_imb_id;
-      if (imb_id < 2) {
-        input_size += imbs[imb_id]->count();
-      } else {
-        imb_size += imbs[imb_id]->count();
-      }
-    }
-    /* Access intermediate diff blobs */
-    for (int i = 0; i < layer_info.imb_diffs_to_access_fw.size(); i++) {
-      ImbInfo& imb_info = layer_info.imb_diffs_to_access_fw[i];
-      int imb_id = imb_info.global_imb_id;
-      imb_size += imbs[imb_id]->count();
-    }
-    param_size += layer_info.num_vals;
-    cout << layer_id << ',' << input_size << ',' << imb_size
-         << ',' << param_size << ',' << update_size << endl;
-  }
-  for (int layer_id = layer_infos_.size() - 1; layer_id >= 0; layer_id--) {
-    LayerInfo& layer_info = layer_infos_[layer_id];
-    int input_size = 0;
-    int imb_size = 0;
-    int param_size = 0;
-    int update_size = 0;
-    for (int i = 0; i < layer_info.imbs_to_access_bw.size(); i++) {
-      ImbInfo& imb_info = layer_info.imbs_to_access_bw[i];
-      int imb_id = imb_info.global_imb_id;
-      if (imb_id < 2) {
-        input_size += imbs[imb_id]->count();
-      } else {
-        imb_size += imbs[imb_id]->count();
-      }
-    }
-    /* Access intermediate diff blobs */
-    for (int i = 0; i < layer_info.imb_diffs_to_access_bw.size(); i++) {
-      ImbInfo& imb_info = layer_info.imb_diffs_to_access_bw[i];
-      int imb_id = imb_info.global_imb_id;
-      imb_size += imbs[imb_id]->count();
-    }
-    param_size += layer_info.num_vals;
-    update_size += layer_info.num_vals;
-    imb_size += layer_info.num_vals;
-    cout << layer_id << ',' << input_size << ',' << imb_size
-         << ',' << param_size << ',' << update_size << endl;
-  }
-
+  /* Prepare access handles */
   int64_t total_size = 0;
   int64_t read_size = 0;
   int64_t write_size = 0;
@@ -715,12 +576,10 @@ void Solver<float>::InitPs() {
     }
   }
 
-
-  /* Initialize LazyTable */
-  ps_config_.lt_config.num_tables = num_tables;
-  CHECK(ps_config_.lt_config.host_list.size());
-  ps_ = make_shared<LazyTableModule>(
-      ps_config_.worker_id, ps_config_.lt_config);
+  /* Initialize GeePS */
+  ps_config_.geeps_config.num_tables = num_tables;
+  CHECK(ps_config_.geeps_config.host_list.size());
+  ps_ = make_shared<GeePs>(ps_config_.worker_id, ps_config_.geeps_config);
   ps_->thread_start();
 
   /* Virtual iteration */
@@ -741,10 +600,10 @@ void Solver<float>::InitPs() {
               layer_info.table_id, layer_info.row_ids,
               ps_config_.slack, layer_info.num_vals);
         } else {
+          bool fetch = true;
           layer_handles.read_handle = ps_->virtual_localaccess_batch(
-              layer_info.row_ids, layer_info.num_vals, true /* fetch */);
+              layer_info.row_ids, layer_info.num_vals, fetch);
         }
-        // cerr << "read " << layer_handles.read_handle << " for " << layer_info.row_ids.size() << endl;
       }
 #if defined(LOCAL_DATA_IN_PS)
       /* Access intermediate data blobs */
@@ -759,7 +618,6 @@ void Solver<float>::InitPs() {
         total_size += access_info.num_vals;
         read_size += imb_info.fetch ? access_info.num_vals : 0;
         CHECK_GE(read_size, 0);
-        // cerr << "read " << handle << " for " << access_info.row_ids.size() << endl;
       }
       /* Access intermediate diff blobs */
       for (int i = 0; i < layer_info.imb_diffs_to_access_fw.size(); i++) {
@@ -773,7 +631,6 @@ void Solver<float>::InitPs() {
         total_size += access_info.num_vals;
         read_size += imb_info.fetch ? access_info.num_vals : 0;
         CHECK_GE(read_size, 0);
-        // cerr << "read " << handle << " for " << access_info.row_ids.size() << endl;
       }
 #endif
 #if defined(LOCAL_DATA_IN_PS)
@@ -786,7 +643,6 @@ void Solver<float>::InitPs() {
         int& handle = layer_handles.imbs_to_release_fw[i];
         handle = ps_->virtual_postlocalaccess_batch(
             access_info.data_handle, imb_info.keep);
-        // cerr << "release " << access_info.data_handle << " for " << access_info.row_ids.size() << endl;
         access_info.data_handle = -1;
         write_size += imb_info.keep ? access_info.num_vals : 0;
         CHECK_GE(write_size, 0);
@@ -800,7 +656,6 @@ void Solver<float>::InitPs() {
         int& handle = layer_handles.imb_diffs_to_release_fw[i];
         handle = ps_->virtual_postlocalaccess_batch(
             access_info.data_handle, imb_info.keep);
-        // cerr << "release " << access_info.data_handle << " for " << access_info.row_ids.size() << endl;
         access_info.data_handle = -1;
         write_size += imb_info.keep ? access_info.num_vals : 0;
         CHECK_GE(write_size, 0);
@@ -812,10 +667,10 @@ void Solver<float>::InitPs() {
           layer_handles.postread_handle = ps_->virtual_postread_batch(
               layer_handles.read_handle);
         } else {
+          bool keep = false;  /* don't need to write back */
           layer_handles.postread_handle = ps_->virtual_postlocalaccess_batch(
-              layer_handles.read_handle, false /* don't need to write back */);
+              layer_handles.read_handle, keep);
         }
-        // cerr << "release " << layer_handles.read_handle << " for " << layer_info.row_ids.size() << endl;
       }
     }
     /* Virtual iteration, backward pass */
@@ -835,13 +690,10 @@ void Solver<float>::InitPs() {
         layer_handles.bw_read_handle = ps_->virtual_read_batch(
             layer_info.table_id, layer_info.row_ids,
             ps_config_.slack, layer_info.num_vals);
+        bool fetch = true;
         layer_handles.history_access_handle =
             ps_->virtual_localaccess_batch(
-                layer_info.history_data_row_ids, layer_info.num_vals,
-                /* fetch */ true);
-        // cerr << "read " << layer_handles.prewrite_handle << " for " << layer_info.row_ids.size() << endl;
-        // cerr << "read " << layer_handles.bw_read_handle << " for " << layer_info.row_ids.size() << endl;
-        // cerr << "read " << layer_handles.history_access_handle << " for " << layer_info.row_ids.size() << endl;
+                layer_info.history_data_row_ids, layer_info.num_vals, fetch);
       }
 #if defined(LOCAL_DATA_IN_PS)
       /* Access intermediate data blobs */
@@ -857,7 +709,6 @@ void Solver<float>::InitPs() {
         total_size += access_info.num_vals;
         read_size += imb_info.fetch ? access_info.num_vals : 0;
         CHECK_GE(read_size, 0);
-        // cerr << "read " << handle << " for " << access_info.row_ids.size() << endl;
       }
       /* Access intermediate diff blobs */
       for (int i = 0; i < layer_info.imb_diffs_to_access_bw.size(); i++) {
@@ -872,7 +723,6 @@ void Solver<float>::InitPs() {
         total_size += access_info.num_vals;
         read_size += imb_info.fetch ? access_info.num_vals : 0;
         CHECK_GE(read_size, 0);
-        // cerr << "read " << handle << " for " << access_info.row_ids.size() << endl;
       }
 #endif
 #if defined(LOCAL_DATA_IN_PS)
@@ -886,7 +736,6 @@ void Solver<float>::InitPs() {
         int& handle = layer_handles.imbs_to_release_bw[i];
         handle = ps_->virtual_postlocalaccess_batch(
             access_info.data_handle, imb_info.keep);
-        // cerr << "release " << access_info.data_handle << " for " << access_info.row_ids.size() << endl;
         access_info.data_handle = -1;
         write_size += imb_info.keep ? access_info.num_vals : 0;
         CHECK_GE(write_size, 0);
@@ -901,7 +750,6 @@ void Solver<float>::InitPs() {
         int& handle = layer_handles.imb_diffs_to_release_bw[i];
         handle = ps_->virtual_postlocalaccess_batch(
             access_info.data_handle, imb_info.keep);
-        // cerr << "release " << access_info.data_handle << " for " << access_info.row_ids.size() << endl;
         access_info.data_handle = -1;
         write_size += imb_info.keep ? access_info.num_vals : 0;
         CHECK_GE(write_size, 0);
@@ -913,12 +761,10 @@ void Solver<float>::InitPs() {
             layer_handles.prewrite_handle);
         layer_handles.bw_postread_handle = ps_->virtual_postread_batch(
             layer_handles.bw_read_handle);
+        bool keep = true;
         layer_handles.history_postaccess_handle =
             ps_->virtual_postlocalaccess_batch(
-                layer_handles.history_access_handle, /* keep */ true);
-        // cerr << "release " << layer_handles.prewrite_handle << " for " << layer_info.row_ids.size() << endl;
-        // cerr << "release " << layer_handles.bw_read_handle << " for " << layer_info.row_ids.size() << endl;
-        // cerr << "release " << layer_handles.history_access_handle << " for " << layer_info.row_ids.size() << endl;
+                layer_handles.history_access_handle, keep);
       }
     }
   }
@@ -933,26 +779,20 @@ void Solver<float>::InitPs() {
     /* Local parameters are only modified at initialization,
      * so we register the write accesses as unrepeated ones. */
     LayerHandles& layer_handles = layer_info.layer_handles[0];
+    bool fetch = false;
     layer_handles.prewrite_handle = ps_->virtual_localaccess_batch(
-        layer_info.row_ids, layer_info.num_vals, false /* no fetch */);
+        layer_info.row_ids, layer_info.num_vals, fetch);
+    bool keep = true;
     layer_handles.write_handle = ps_->virtual_postlocalaccess_batch(
-        layer_handles.prewrite_handle, true /* keep */);
+        layer_handles.prewrite_handle, keep);
   }
   ps_->finish_virtual_iteration();
   LOG(INFO) << "Virtual iteration done";
-  cout << "total_size = " << total_size << endl;
-  cout << "read_size = " << read_size << endl;
-  cout << "write_size = " << write_size << endl;
 }
 
 template <>
 void SGDSolver<float>::InitPsValues() {
-  if (ps_config_.no_ps) {
-    return;
-  }
-
-  bool print_ = false;
-  // bool print_ = ps_config_.worker_id == 0;
+  bool print_ = this->ps_config_.debug ? ps_config_.worker_id == 0 : false;
 
   vector<shared_ptr<Layer<float> > >& layers = this->net_->layers_;
   vector<bool>& layer_need_backward = this->net_->layer_need_backward_;
@@ -975,13 +815,13 @@ void SGDSolver<float>::InitPsValues() {
       /* Non-local parameters are stored in PS,
        * so only one worker needs to set it. */
       /* Pre-write */
-      RowData *inc_buffer = NULL;
+      RowData *update_buffer = NULL;
       if (!layer_info.local_param) {
-        ps_->preinc_batch(&inc_buffer, layer_handles.prewrite_handle);
+        ps_->preupdate_batch(&update_buffer, layer_handles.prewrite_handle);
       } else {
-        ps_->localaccess_batch(&inc_buffer, layer_handles.prewrite_handle);
+        ps_->localaccess_batch(&update_buffer, layer_handles.prewrite_handle);
       }
-      float *params_vals = reinterpret_cast<float *>(inc_buffer);
+      float *params_vals = reinterpret_cast<float *>(update_buffer);
       for (int param_id = 0;
           param_id < layer_info.param_infos.size(); param_id++) {
         int param_val_offset = layer_info.param_infos[param_id].val_offset;
@@ -996,10 +836,6 @@ void SGDSolver<float>::InitPsValues() {
         /* Values are filled in CPU memory, do a gpu_data() call to copy them
          * to GPU memory */
         param->gpu_data();
-        // const float *param_data = param->gpu_data();
-        // float param_dot;
-        // caffe_gpu_dot<float>(param->count(), param_data, param_data, &param_dot);
-        // LOG(INFO) << "param_dot = " << param_dot;
         change_head = true;
             /* "true" means that we will change the head to UNINITIALIZED */
         param->set_gpu_data(NULL, change_head);
@@ -1007,7 +843,7 @@ void SGDSolver<float>::InitPsValues() {
       }
       /* Write */
       if (!layer_info.local_param) {
-        ps_->inc_batch(layer_handles.write_handle);
+        ps_->update_batch(layer_handles.write_handle);
       } else {
         ps_->postlocalaccess_batch(layer_handles.write_handle);
       }
@@ -1019,7 +855,8 @@ void SGDSolver<float>::InitPsValues() {
         shared_ptr<Blob<float> >& param = layer->blobs()[param_id];
         bool change_head = true;
             /* "true" means that we will change the head to UNINITIALIZED */
-        param->set_gpu_data(NULL, change_head);
+        bool allow_reset_cpu_data = true;
+        param->set_gpu_data(NULL, change_head, allow_reset_cpu_data);
       }
     }
   }
@@ -1085,8 +922,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
    * the testing network has the same topology as the training network. */
   tbb::tick_count tick_start;
 
-  bool print_ = false;
-  // bool print_ = ps_config_.worker_id == 0;
+  bool print_ = this->ps_config_.debug ? ps_config_.worker_id == 0 : false;
 
   if (print_) {
     if (test) {
@@ -1248,6 +1084,9 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
       }
 
       tick_start = tbb::tick_count::now();
+      /* We release the intermediate data first, because usually the
+       * intermediate data released here was allocated from the last layer,
+       * before the allocation of the parameter data of this layer. */
 #if defined(LOCAL_DATA_IN_PS)
       /* Release intermediate data blobs */
       if (print_) {
@@ -1293,6 +1132,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
         for (int param_id = 0;
             param_id < layer_info.param_infos.size(); param_id++) {
           shared_ptr<Blob<float> >& param = layer->blobs()[param_id];
+          CHECK_NE(param->check_data_head(), SyncedMemory::HEAD_AT_CPU);
           param->set_gpu_data(NULL, true);
         }
         if (!layer_info.local_param) {
@@ -1336,7 +1176,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
         }
         CHECK(!layer_info.local_param);
         RowData *write_buffer = NULL;
-        ps_->preinc_batch(&write_buffer, layer_handles.prewrite_handle);
+        ps_->preupdate_batch(&write_buffer, layer_handles.prewrite_handle);
         float *write_params_vals = reinterpret_cast<float *>(write_buffer);
         size_t size = layer_info.num_vals * sizeof(float);
         CUDA_CHECK(cudaMemsetAsync(
@@ -1377,11 +1217,6 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
               layer_info.param_infos[param_id].global_param_id;
           shared_ptr<Blob<float> >& updates_history = history_[global_param_id];
           updates_history->set_gpu_data(history_param_vals, true);
-          // if (!test) {
-            // float history_dot;
-            // caffe_gpu_dot<float>(updates_history->count(), updates_history->gpu_data(), updates_history->gpu_data(), &history_dot);
-            // LOG(INFO) << "history_dot #" << global_param_id << " is " << history_dot;
-          // }
           if (do_snapshot) {
             /* Write the updates history data to solver state protobuf */
             tbb::tick_count snapshot_start;
@@ -1461,6 +1296,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
           if (layer_types[layer_id] == "Data" ||
               (layer_types[layer_id] == "LRN" && i > 0) ||
               (layer_types[layer_id] == "Pooling" && i > 0) ||
+              (layer_types[layer_id] == "BatchNorm" && i > 0) ||
               (layer_types[layer_id] == "Dropout" && i > 0)) {
             /* Do not use top diff blobs */
             continue;
@@ -1553,11 +1389,11 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
               layer_info.param_infos[param_id].global_param_id;
           if (!test) {
             /* Adjust gradient */
-            float rate = GetLearningRate();
+            float learning_rate = GetLearningRate();
             // Normalize(global_param_id);
             Regularize(global_param_id);
             // LOG(INFO) << "ComputeUpdateValue";
-            ComputeUpdateValue(global_param_id, rate);
+            ComputeUpdateValue(global_param_id, learning_rate);
             CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
           }
           shared_ptr<Blob<float> >& param = layer->blobs()[param_id];
@@ -1580,7 +1416,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
 
         tick_start = tbb::tick_count::now();
         /* Apply updates to PS */
-        ps_->inc_batch(layer_handles.write_handle);
+        ps_->update_batch(layer_handles.write_handle);
         /* Release read buffers */
         if (print_) {
           LOG(INFO) << "Release read buffers";
@@ -1612,8 +1448,8 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
       }
     }
   }
-  ps_->iterate();
   loss /= ps_config_.batches_per_clock;
+  ps_->iterate();
   return loss;
 }
 
@@ -1786,10 +1622,8 @@ void Solver<Dtype>::Step(int iters) {
     // the number of times the weights have been updated.
     ++iter_;
   }
-  if (!ps_config_.no_ps) {
-    string json_stats = ps_->json_stats();
-    cerr << json_stats << endl;
-  }
+  string json_stats = ps_->json_stats();
+  cerr << json_stats << endl;
 }
 
 template <typename Dtype>
@@ -1915,6 +1749,7 @@ void Solver<Dtype>::Snapshot() {
 
 template <typename Dtype>
 void Solver<Dtype>::CheckSnapshotWritePermissions() {
+  CHECK(0);
   if (Caffe::root_solver() && param_.snapshot()) {
     CHECK(param_.has_snapshot_prefix())
         << "In solver params, snapshot is specified but snapshot_prefix is not";
@@ -1939,16 +1774,21 @@ string Solver<Dtype>::SnapshotFilename(const string extension) {
 
 template <typename Dtype>
 string Solver<Dtype>::SnapshotToBinaryProto() {
-  string model_filename = SnapshotFilename(".caffemodel");
-  LOG(INFO) << "Snapshotting to binary proto file " << model_filename;
-  NetParameter net_param;
-  net_->ToProto(&net_param, param_.snapshot_diff());
-  WriteProtoToBinaryFile(net_param, model_filename);
+  string snapshot_name = SnapshotFilename("");
+  string model_filename =
+      (boost::format("%s.caffemodel") % snapshot_name).str();
+  NetParameter& net_param = snapshot_net_param_protobuf_;
+  if (ps_config_.worker_id == 0) {
+    /* Only worker-0 snapshots model, because we assume we will only do BSP */
+    LOG(INFO) << "Snapshotting model to " << model_filename;
+    WriteProtoToBinaryFile(net_param, model_filename);
+  }
   return model_filename;
 }
 
 template <typename Dtype>
 string Solver<Dtype>::SnapshotToHDF5() {
+  CHECK(0);
   string model_filename = SnapshotFilename(".caffemodel.h5");
   LOG(INFO) << "Snapshotting to HDF5 file " << model_filename;
   net_->ToHDF5(model_filename, param_.snapshot_diff());
@@ -2078,28 +1918,6 @@ void SGDSolver<Dtype>::ClipGradients() {
         net_params[i]->scale_diff(scale_factor);
       }
     }
-  }
-}
-
-template <typename Dtype>
-void SGDSolver<Dtype>::ApplyUpdate() {
-  Dtype rate = GetLearningRate();
-  // if (!this->ps_config_.no_ps) {
-    // /* Cui: now we have more workers */
-    // rate /= this->ps_config_.num_workers;
-  // }
-
-  if (this->param_.display() && this->iter_ % this->param_.display() == 0) {
-    LOG(INFO) << "Iteration " << this->iter_ << ", lr = " << rate;
-  }
-  ClipGradients();
-  for (int param_id = 0; param_id < this->net_->params().size(); ++param_id) {
-    Normalize(param_id);
-    Regularize(param_id);
-    ComputeUpdateValue(param_id, rate);
-  }
-  if (this->ps_config_.no_ps) {
-    this->net_->Update();
   }
 }
 
@@ -2248,25 +2066,23 @@ void SGDSolver<Dtype>::SnapshotSolverState(const string& model_filename) {
 template <typename Dtype>
 void SGDSolver<Dtype>::SnapshotSolverStateToBinaryProto(
     const string& model_filename) {
-  SolverState state;
+  /* Actually this function can be moved to the parent Solver class */
+  SolverState& state = this->snapshot_solver_state_protobuf_;
   state.set_iter(this->iter_);
   state.set_learned_net(model_filename);
   state.set_current_step(this->current_step_);
-  state.clear_history();
-  for (int i = 0; i < history_.size(); ++i) {
-    // Add history
-    BlobProto* history_blob = state.add_history();
-    history_[i]->ToProto(history_blob);
-  }
-  string snapshot_filename = Solver<Dtype>::SnapshotFilename(".solverstate");
+  string snapshot_name = this->SnapshotFilename("");
+  string state_filename = (boost::format("%s.solverstate.%i")
+      % snapshot_name % this->ps_config_.worker_id).str();
   LOG(INFO)
-    << "Snapshotting solver state to binary proto file " << snapshot_filename;
-  WriteProtoToBinaryFile(state, snapshot_filename.c_str());
+    << "Snapshotting solver state to binary proto file " << state_filename;
+  WriteProtoToBinaryFile(state, state_filename);
 }
 
 template <typename Dtype>
 void SGDSolver<Dtype>::SnapshotSolverStateToHDF5(
     const string& model_filename) {
+  CHECK(0);
   string snapshot_filename =
       Solver<Dtype>::SnapshotFilename(".solverstate.h5");
   LOG(INFO) << "Snapshotting solver state to HDF5 file " << snapshot_filename;
@@ -2292,26 +2108,33 @@ void SGDSolver<Dtype>::SnapshotSolverStateToHDF5(
 
 template <typename Dtype>
 void SGDSolver<Dtype>::RestoreSolverStateFromBinaryProto(
-    const string& state_file) {
+    const string& snapshot_name) {
   SolverState state;
-  ReadProtoFromBinaryFile(state_file, &state);
+  string state_filename = (boost::format("%s.solverstate.%i")
+      % snapshot_name % this->ps_config_.worker_id).str();
+  ReadProtoFromBinaryFile(state_filename, &state);
   this->iter_ = state.iter();
   if (state.has_learned_net()) {
     NetParameter net_param;
-    ReadNetParamsFromBinaryFileOrDie(state.learned_net().c_str(), &net_param);
+    string model_filename = (boost::format("%s.caffemodel")
+        % snapshot_name).str();
+    ReadNetParamsFromBinaryFileOrDie(model_filename.c_str(), &net_param);
     this->net_->CopyTrainedLayersFrom(net_param);
   }
   this->current_step_ = state.current_step();
-  CHECK_EQ(state.history_size(), history_.size())
-      << "Incorrect length of history blobs.";
-  LOG(INFO) << "SGDSolver: restoring history";
-  for (int i = 0; i < history_.size(); ++i) {
-    history_[i]->FromProto(state.history(i));
+  if (this->ps_config_.keep_momentum) {
+    CHECK_EQ(state.history_size(), history_.size())
+        << "Incorrect length of history blobs.";
+    LOG(INFO) << "SGDSolver: restoring history";
+    for (int i = 0; i < history_.size(); ++i) {
+      history_[i]->FromProto(state.history(i));
+    }
   }
 }
 
 template <typename Dtype>
 void SGDSolver<Dtype>::RestoreSolverStateFromHDF5(const string& state_file) {
+  CHECK(0);
   hid_t file_hid = H5Fopen(state_file.c_str(), H5F_ACC_RDONLY, H5P_DEFAULT);
   CHECK_GE(file_hid, 0) << "Couldn't open solver state file " << state_file;
   this->iter_ = hdf5_load_int(file_hid, "iter");
