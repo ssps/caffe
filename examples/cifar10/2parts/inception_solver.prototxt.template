@@ -1,11 +1,11 @@
 # reduce the learning rate after 8 epochs (4000 iters) by a factor of 10
 
 # The train/test net protocol buffer definition
-net: "examples/cifar10/1part/inception_train_val.prototxt.%"
+net: "examples/cifar10/2parts/inception_train_val.prototxt.%"
 # test_iter specifies how many forward passes the test should carry out.
 # In the case of MNIST, we have test batch size 100 and 100 test iterations,
 # covering the full 10,000 testing images.
-test_iter: 100
+test_iter: 12
 # Carry out testing every 500 training iterations.
 test_interval: 5000000
 test_initialization: false

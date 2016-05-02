@@ -1,4 +1,4 @@
-hostfile=examples/cifar10/1part/machinefile
+hostfile=examples/cifar10/2parts/machinefile
 num_channels=4
 slack=0
 thread_cache_capacity=0
