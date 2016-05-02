@@ -1,0 +1,12 @@
+#!/usr/bin/env sh
+# This script converts the cifar data into leveldb format.
+
+OUTPUT=examples/cifar10/8parts
+DATA=data/cifar10
+DBTYPE=lmdb
+
+echo "Creating $DBTYPE..."
+
+./build/examples/cifar10/convert_partitioned_cifar_data.bin $DATA $OUTPUT $DBTYPE 8 %
+
+echo "Done."
