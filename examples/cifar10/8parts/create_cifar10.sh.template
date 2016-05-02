@@ -9,4 +9,8 @@ echo "Creating $DBTYPE..."
 
 ./build/examples/cifar10/convert_partitioned_cifar_data.bin $DATA $OUTPUT $DBTYPE 8 %
 
+echo "Computing image mean..."
+
+./build/tools/compute_image_mean -backend=$DBTYPE $OUTPUT/cifar10_train_$DBTYPE.% $OUTPUT/mean.binaryproto.%
+
 echo "Done."
