@@ -31,6 +31,8 @@ DEFINE_int32(gpu, -1,
     "Run in GPU mode on given device ID.");
 DEFINE_string(solver, "",
     "The solver definition protocol buffer text file.");
+DEFINE_string(machinefile, "",
+    "Machine file path.");
 DEFINE_string(ps_config, "",
     "Configuration file path.");
 DEFINE_string(model, "",
@@ -115,13 +117,8 @@ void parse_hostfile(const string& hostfile, vector<string>& hostlist) {
 }
 
 void parse_config_file(caffe::PsConfig& ps_config) {
-  string hostfile;
-
   po::options_description desc("Allowed options");
   desc.add_options()
-    ("hostfile",
-     po::value<string>(&hostfile),
-     "")
     ("slack",
      po::value<int>(&ps_config.slack),
      "")
@@ -185,7 +182,6 @@ void parse_config_file(caffe::PsConfig& ps_config) {
   po::variables_map vm;
   po::store(po::parse_config_file(config_in, desc), vm);
   po::notify(vm);
-  parse_hostfile(hostfile, ps_config.geeps_config.host_list);
 }
 
 // Train / Finetune a model.
@@ -223,6 +219,7 @@ int train() {
   /* Cui: prepare PS config */
   caffe::PsConfig ps_config;
   parse_config_file(ps_config);
+  parse_hostfile(FLAGS_machinefile, ps_config.geeps_config.host_list);
   ps_config.num_workers = ps_config.geeps_config.host_list.size();
   CHECK_LT(worker_id, ps_config.num_workers);
   ps_config.worker_id = worker_id;
