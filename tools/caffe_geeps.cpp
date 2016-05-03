@@ -127,15 +127,15 @@ void parse_config_file(caffe::PsConfig& ps_config) {
      "")
     ("thread_cache_capacity",
      po::value<int>(&(ps_config.geeps_config.thread_cache_capacity))
-     ->default_value(-1),
+     ->default_value(0),
      "")
     ("gpu_process_cache_capacity",
      po::value<int>(&(ps_config.geeps_config.gpu_process_cache_capacity))
-     ->default_value(-1),
+     ->default_value(-3),
      "")
     ("gpu_local_storage_capacity",
      po::value<int>(&(ps_config.geeps_config.gpu_local_storage_capacity))
-     ->default_value(-1),
+     ->default_value(-3),
      "")
     ("gpu_memory_capacity",
      po::value<int>(&(ps_config.geeps_config.gpu_memory_capacity))
@@ -147,7 +147,7 @@ void parse_config_file(caffe::PsConfig& ps_config) {
      "")
     ("pinned_cpu_memory",
      po::value<int>(&(ps_config.geeps_config.pinned_cpu_memory))
-     ->default_value(0),
+     ->default_value(1),
      "")
     ("batches_per_clock",
      po::value<int>(&(ps_config.batches_per_clock))

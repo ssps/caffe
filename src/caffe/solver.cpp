@@ -580,7 +580,6 @@ void Solver<float>::InitPs() {
   ps_config_.geeps_config.num_tables = num_tables;
   CHECK(ps_config_.geeps_config.host_list.size());
   ps_ = make_shared<GeePs>(ps_config_.worker_id, ps_config_.geeps_config);
-  ps_->thread_start();
 
   /* Virtual iteration */
   /* We hope the allocated space is contiguous in the cache, so:
@@ -596,13 +595,12 @@ void Solver<float>::InitPs() {
       /* Read model parameters */
       if (layer_info.param_infos.size()) {
         if (!layer_info.local_param) {
-          layer_handles.read_handle = ps_->virtual_read_batch(
-              layer_info.table_id, layer_info.row_ids,
-              ps_config_.slack, layer_info.num_vals);
+          layer_handles.read_handle = ps_->VirtualRead(
+              layer_info.table_id, layer_info.row_ids, ps_config_.slack);
         } else {
           bool fetch = true;
-          layer_handles.read_handle = ps_->virtual_localaccess_batch(
-              layer_info.row_ids, layer_info.num_vals, fetch);
+          layer_handles.read_handle = ps_->VirtualLocalAccess(
+              layer_info.row_ids, fetch);
         }
       }
 #if defined(LOCAL_DATA_IN_PS)
@@ -612,8 +610,8 @@ void Solver<float>::InitPs() {
         RowAccessInfo& access_info = imb_data_infos_[imb_info.global_imb_id];
         CHECK_LT(i, layer_handles.imbs_to_access_fw.size());
         int& handle = layer_handles.imbs_to_access_fw[i];
-        handle = ps_->virtual_localaccess_batch(
-            access_info.row_ids, access_info.num_vals, imb_info.fetch);
+        handle = ps_->VirtualLocalAccess(
+            access_info.row_ids, imb_info.fetch);
         access_info.data_handle = handle;
         total_size += access_info.num_vals;
         read_size += imb_info.fetch ? access_info.num_vals : 0;
@@ -625,8 +623,8 @@ void Solver<float>::InitPs() {
         RowAccessInfo& access_info = imb_diff_infos_[imb_info.global_imb_id];
         CHECK_LT(i, layer_handles.imb_diffs_to_access_fw.size());
         int& handle = layer_handles.imb_diffs_to_access_fw[i];
-        handle = ps_->virtual_localaccess_batch(
-            access_info.row_ids, access_info.num_vals, imb_info.fetch);
+        handle = ps_->VirtualLocalAccess(
+            access_info.row_ids, imb_info.fetch);
         access_info.data_handle = handle;
         total_size += access_info.num_vals;
         read_size += imb_info.fetch ? access_info.num_vals : 0;
@@ -641,7 +639,7 @@ void Solver<float>::InitPs() {
         CHECK_GE(access_info.data_handle, 0);
         CHECK_LT(i, layer_handles.imbs_to_release_fw.size());
         int& handle = layer_handles.imbs_to_release_fw[i];
-        handle = ps_->virtual_postlocalaccess_batch(
+        handle = ps_->VirtualPostLocalAccess(
             access_info.data_handle, imb_info.keep);
         access_info.data_handle = -1;
         write_size += imb_info.keep ? access_info.num_vals : 0;
@@ -654,7 +652,7 @@ void Solver<float>::InitPs() {
         CHECK_GE(access_info.data_handle, 0);
         CHECK_LT(i, layer_handles.imb_diffs_to_release_fw.size());
         int& handle = layer_handles.imb_diffs_to_release_fw[i];
-        handle = ps_->virtual_postlocalaccess_batch(
+        handle = ps_->VirtualPostLocalAccess(
             access_info.data_handle, imb_info.keep);
         access_info.data_handle = -1;
         write_size += imb_info.keep ? access_info.num_vals : 0;
@@ -664,11 +662,11 @@ void Solver<float>::InitPs() {
       /* Release model parameters */
       if (layer_info.param_infos.size()) {
         if (!layer_info.local_param) {
-          layer_handles.postread_handle = ps_->virtual_postread_batch(
+          layer_handles.postread_handle = ps_->VirtualPostRead(
               layer_handles.read_handle);
         } else {
           bool keep = false;  /* don't need to write back */
-          layer_handles.postread_handle = ps_->virtual_postlocalaccess_batch(
+          layer_handles.postread_handle = ps_->VirtualPostLocalAccess(
               layer_handles.read_handle, keep);
         }
       }
@@ -685,15 +683,14 @@ void Solver<float>::InitPs() {
       /* Read and prewrite model parameters */
       if (layer_info.param_infos.size()) {
         CHECK(!layer_info.local_param);
-        layer_handles.prewrite_handle = ps_->virtual_prewrite_batch(
-            layer_info.table_id, layer_info.row_ids, layer_info.num_vals);
-        layer_handles.bw_read_handle = ps_->virtual_read_batch(
-            layer_info.table_id, layer_info.row_ids,
-            ps_config_.slack, layer_info.num_vals);
+        layer_handles.prewrite_handle = ps_->VirtualPreUpdate(
+            layer_info.table_id, layer_info.row_ids);
+        layer_handles.bw_read_handle = ps_->VirtualRead(
+            layer_info.table_id, layer_info.row_ids, ps_config_.slack);
         bool fetch = true;
         layer_handles.history_access_handle =
-            ps_->virtual_localaccess_batch(
-                layer_info.history_data_row_ids, layer_info.num_vals, fetch);
+            ps_->VirtualLocalAccess(
+                layer_info.history_data_row_ids, fetch);
       }
 #if defined(LOCAL_DATA_IN_PS)
       /* Access intermediate data blobs */
@@ -703,8 +700,8 @@ void Solver<float>::InitPs() {
         RowAccessInfo& access_info = imb_data_infos_[imb_info.global_imb_id];
         CHECK_LT(i, layer_handles.imbs_to_access_bw.size());
         int& handle = layer_handles.imbs_to_access_bw[i];
-        handle = ps_->virtual_localaccess_batch(
-            access_info.row_ids, access_info.num_vals, imb_info.fetch);
+        handle = ps_->VirtualLocalAccess(
+            access_info.row_ids, imb_info.fetch);
         access_info.data_handle = handle;
         total_size += access_info.num_vals;
         read_size += imb_info.fetch ? access_info.num_vals : 0;
@@ -717,8 +714,8 @@ void Solver<float>::InitPs() {
         RowAccessInfo& access_info = imb_diff_infos_[imb_info.global_imb_id];
         CHECK_LT(i, layer_handles.imb_diffs_to_access_bw.size());
         int& handle = layer_handles.imb_diffs_to_access_bw[i];
-        handle = ps_->virtual_localaccess_batch(
-            access_info.row_ids, access_info.num_vals, imb_info.fetch);
+        handle = ps_->VirtualLocalAccess(
+            access_info.row_ids, imb_info.fetch);
         access_info.data_handle = handle;
         total_size += access_info.num_vals;
         read_size += imb_info.fetch ? access_info.num_vals : 0;
@@ -734,7 +731,7 @@ void Solver<float>::InitPs() {
         CHECK_GE(access_info.data_handle, 0);
         CHECK_LT(i, layer_handles.imbs_to_release_bw.size());
         int& handle = layer_handles.imbs_to_release_bw[i];
-        handle = ps_->virtual_postlocalaccess_batch(
+        handle = ps_->VirtualPostLocalAccess(
             access_info.data_handle, imb_info.keep);
         access_info.data_handle = -1;
         write_size += imb_info.keep ? access_info.num_vals : 0;
@@ -748,7 +745,7 @@ void Solver<float>::InitPs() {
         CHECK_GE(access_info.data_handle, 0);
         CHECK_LT(i, layer_handles.imb_diffs_to_release_bw.size());
         int& handle = layer_handles.imb_diffs_to_release_bw[i];
-        handle = ps_->virtual_postlocalaccess_batch(
+        handle = ps_->VirtualPostLocalAccess(
             access_info.data_handle, imb_info.keep);
         access_info.data_handle = -1;
         write_size += imb_info.keep ? access_info.num_vals : 0;
@@ -757,18 +754,18 @@ void Solver<float>::InitPs() {
 #endif
       /* Postread and write model parameters */
       if (layer_info.param_infos.size()) {
-        layer_handles.write_handle = ps_->virtual_write_batch(
+        layer_handles.write_handle = ps_->VirtualUpdate(
             layer_handles.prewrite_handle);
-        layer_handles.bw_postread_handle = ps_->virtual_postread_batch(
+        layer_handles.bw_postread_handle = ps_->VirtualPostRead(
             layer_handles.bw_read_handle);
         bool keep = true;
         layer_handles.history_postaccess_handle =
-            ps_->virtual_postlocalaccess_batch(
+            ps_->VirtualPostLocalAccess(
                 layer_handles.history_access_handle, keep);
       }
     }
   }
-  ps_->virtual_clock();
+  ps_->VirtualClock();
   /* Report unrepeated accesses.
    * Currently, we assume all accesses after clock are unrepeated accesses. */
   for (int layer_id = 0; layer_id < layer_infos_.size(); layer_id++) {
@@ -780,13 +777,13 @@ void Solver<float>::InitPs() {
      * so we register the write accesses as unrepeated ones. */
     LayerHandles& layer_handles = layer_info.layer_handles[0];
     bool fetch = false;
-    layer_handles.prewrite_handle = ps_->virtual_localaccess_batch(
-        layer_info.row_ids, layer_info.num_vals, fetch);
+    layer_handles.prewrite_handle = ps_->VirtualLocalAccess(
+        layer_info.row_ids, fetch);
     bool keep = true;
-    layer_handles.write_handle = ps_->virtual_postlocalaccess_batch(
+    layer_handles.write_handle = ps_->VirtualPostLocalAccess(
         layer_handles.prewrite_handle, keep);
   }
-  ps_->finish_virtual_iteration();
+  ps_->FinishVirtualIteration();
   LOG(INFO) << "Virtual iteration done";
 }
 
@@ -817,9 +814,9 @@ void SGDSolver<float>::InitPsValues() {
       /* Pre-write */
       RowData *update_buffer = NULL;
       if (!layer_info.local_param) {
-        ps_->preupdate_batch(&update_buffer, layer_handles.prewrite_handle);
+        ps_->PreUpdate(layer_handles.prewrite_handle, &update_buffer);
       } else {
-        ps_->localaccess_batch(&update_buffer, layer_handles.prewrite_handle);
+        ps_->LocalAccess(layer_handles.prewrite_handle, &update_buffer);
       }
       float *params_vals = reinterpret_cast<float *>(update_buffer);
       for (int param_id = 0;
@@ -843,9 +840,9 @@ void SGDSolver<float>::InitPsValues() {
       }
       /* Write */
       if (!layer_info.local_param) {
-        ps_->update_batch(layer_handles.write_handle);
+        ps_->Update(layer_handles.write_handle);
       } else {
-        ps_->postlocalaccess_batch(layer_handles.write_handle);
+        ps_->PostLocalAccess(layer_handles.write_handle);
       }
     } else {
       CHECK(!layer_info.local_param && ps_config_.worker_id != 0);
@@ -874,8 +871,7 @@ void SGDSolver<float>::InitPsValues() {
     }
     /* Pre-write */
     RowData *history_buffer = NULL;
-    ps_->localaccess_batch(
-        &history_buffer, layer_handles.history_access_handle);
+    ps_->LocalAccess(layer_handles.history_access_handle, &history_buffer);
     float *history_vals = reinterpret_cast<float *>(history_buffer);
     for (int param_id = 0;
         param_id < layer_info.param_infos.size(); param_id++) {
@@ -898,12 +894,12 @@ void SGDSolver<float>::InitPsValues() {
     }
     /* Write */
     CHECK_GT(layer_handles.history_postaccess_handle, 0);
-    ps_->postlocalaccess_batch(layer_handles.history_postaccess_handle);
+    ps_->PostLocalAccess(layer_handles.history_postaccess_handle);
   }
   LOG(INFO) << "Set initial parameter values done";
-  ps_->iterate();
-  ps_->start_opseq();
-  LOG(INFO) << "opseq started";
+  ps_->Clock();
+  ps_->StartIterations();
+  LOG(INFO) << "Iterations started";
 }
 
 template <>
@@ -956,9 +952,9 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
         }
         RowData *read_buffer = NULL;
         if (!layer_info.local_param) {
-          ps_->read_batch(&read_buffer, layer_handles.read_handle);
+          ps_->Read(layer_handles.read_handle, &read_buffer);
         } else {
-          ps_->localaccess_batch(&read_buffer, layer_handles.read_handle);
+          ps_->LocalAccess(layer_handles.read_handle, &read_buffer);
         }
         float *params_vals = reinterpret_cast<float *>(read_buffer);
         for (int param_id = 0;
@@ -1004,7 +1000,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
         CHECK_LT(imb_info.global_imb_id, imbs.size());
         shared_ptr<Blob<float> >& imb = imbs[imb_info.global_imb_id];
         RowData *read_buffer = NULL;
-        ps_->localaccess_batch(&read_buffer, handle);
+        ps_->LocalAccess(handle, &read_buffer);
         CHECK(!imb->check_gpu_data())
             << "layer " << layer_names[layer_id] << " has gpu data "
             << imb_info.global_imb_id;
@@ -1024,7 +1020,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
         CHECK_LT(imb_info.global_imb_id, imbs.size());
         shared_ptr<Blob<float> >& imb = imbs[imb_info.global_imb_id];
         RowData *read_buffer = NULL;
-        ps_->localaccess_batch(&read_buffer, handle);
+        ps_->LocalAccess(handle, &read_buffer);
         CHECK(!imb->check_gpu_diff())
             << "layer " << layer_names[layer_id] << " has gpu diff";
         imb->set_gpu_diff(reinterpret_cast<float *>(read_buffer), true);
@@ -1103,7 +1099,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
         imb->gpu_data();
            /* Make sure everything is copied to GPU memory */
         imb->set_gpu_data(NULL, true);
-        ps_->postlocalaccess_batch(handle);
+        ps_->PostLocalAccess(handle);
       }
       /* Release intermediate diff blobs */
       if (print_) {
@@ -1120,7 +1116,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
         imb->gpu_diff();
            /* Make sure everything is copied to GPU memory */
         imb->set_gpu_diff(NULL, true);
-        ps_->postlocalaccess_batch(handle);
+        ps_->PostLocalAccess(handle);
       }
 #endif
       /* Release read buffers */
@@ -1136,9 +1132,9 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
           param->set_gpu_data(NULL, true);
         }
         if (!layer_info.local_param) {
-          ps_->postread_batch(layer_handles.postread_handle);
+          ps_->PostRead(layer_handles.postread_handle);
         } else {
-          ps_->postlocalaccess_batch(layer_handles.postread_handle);
+          ps_->PostLocalAccess(layer_handles.postread_handle);
         }
       }
       CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
@@ -1176,7 +1172,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
         }
         CHECK(!layer_info.local_param);
         RowData *write_buffer = NULL;
-        ps_->preupdate_batch(&write_buffer, layer_handles.prewrite_handle);
+        ps_->PreUpdate(layer_handles.prewrite_handle, &write_buffer);
         float *write_params_vals = reinterpret_cast<float *>(write_buffer);
         size_t size = layer_info.num_vals * sizeof(float);
         CUDA_CHECK(cudaMemsetAsync(
@@ -1195,7 +1191,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
           LOG(INFO) << "Read params";
         }
         RowData *read_buffer = NULL;
-        ps_->read_batch(&read_buffer, layer_handles.bw_read_handle);
+        ps_->Read(layer_handles.bw_read_handle, &read_buffer);
         float *read_params_vals = reinterpret_cast<float *>(read_buffer);
         for (int param_id = 0;
             param_id < layer_info.param_infos.size(); param_id++) {
@@ -1206,8 +1202,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
         }
         /* Access local updates history */
         RowData *history_buffer = NULL;
-        ps_->localaccess_batch(
-            &history_buffer, layer_handles.history_access_handle);
+        ps_->LocalAccess(layer_handles.history_access_handle, &history_buffer);
         float *history_vals = reinterpret_cast<float *>(history_buffer);
         for (int param_id = 0;
             param_id < layer_info.param_infos.size(); param_id++) {
@@ -1247,7 +1242,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
         }
         shared_ptr<Blob<float> >& imb = imbs[imb_info.global_imb_id];
         RowData *imb_buffer = NULL;
-        ps_->localaccess_batch(&imb_buffer, handle);
+        ps_->LocalAccess(handle, &imb_buffer);
         CHECK(!imb->check_gpu_data())
             << "layer " << layer_names[layer_id] << " has gpu data";
         imb->set_gpu_data(reinterpret_cast<float *>(imb_buffer), true);
@@ -1265,7 +1260,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
         }
         shared_ptr<Blob<float> >& imb = imbs[imb_info.global_imb_id];
         RowData *imb_buffer = NULL;
-        ps_->localaccess_batch(&imb_buffer, handle);
+        ps_->LocalAccess(handle, &imb_buffer);
         CHECK(!imb->check_gpu_diff())
             << "layer " << layer_names[layer_id] << " has gpu diff";
         imb->set_gpu_diff(reinterpret_cast<float *>(imb_buffer), true);
@@ -1351,7 +1346,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
         imb->gpu_data();
           /* Make sure everything is copied to GPU memory */
         imb->set_gpu_data(NULL, true);
-        ps_->postlocalaccess_batch(handle);
+        ps_->PostLocalAccess(handle);
       }
       /* Release intermediate diff blobs */
       if (print_) {
@@ -1368,7 +1363,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
         imb->gpu_diff();
           /* Make sure everything is copied to GPU memory */
         imb->set_gpu_diff(NULL, true);
-        ps_->postlocalaccess_batch(handle);
+        ps_->PostLocalAccess(handle);
       }
 #endif
       CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
@@ -1416,7 +1411,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
 
         tick_start = tbb::tick_count::now();
         /* Apply updates to PS */
-        ps_->update_batch(layer_handles.write_handle);
+        ps_->Update(layer_handles.write_handle);
         /* Release read buffers */
         if (print_) {
           LOG(INFO) << "Release read buffers";
@@ -1426,7 +1421,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
           shared_ptr<Blob<float> >& param = layer->blobs()[param_id];
           param->set_gpu_data(NULL, true);
         }
-        ps_->postread_batch(layer_handles.bw_postread_handle);
+        ps_->PostRead(layer_handles.bw_postread_handle);
         /* Release local updates history */
         for (int param_id = 0;
             param_id < layer_info.param_infos.size(); param_id++) {
@@ -1436,7 +1431,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
             /* Make sure everything is copied to GPU memory */
           history_[global_param_id]->set_gpu_data(NULL, true);
         }
-        ps_->postlocalaccess_batch(layer_handles.history_postaccess_handle);
+        ps_->PostLocalAccess(layer_handles.history_postaccess_handle);
         CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
         if (!test) {
           layer_info.bw_write_time +=
@@ -1449,7 +1444,7 @@ float SGDSolver<float>::ForwardBackwardUsingPs(
     }
   }
   loss /= ps_config_.batches_per_clock;
-  ps_->iterate();
+  ps_->Clock();
   return loss;
 }
 
@@ -1622,7 +1617,7 @@ void Solver<Dtype>::Step(int iters) {
     // the number of times the weights have been updated.
     ++iter_;
   }
-  string json_stats = ps_->json_stats();
+  string json_stats = ps_->GetStats();
   cerr << json_stats << endl;
 }
 
