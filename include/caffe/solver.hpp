@@ -150,6 +150,7 @@ class Solver {
   void InitTrainNet();
   void InitTestNets();
   void InitPs();
+  void PrepareAccessInfo();
   void InitSnapshot();
   void InitNetParameterSnapshot();
 
@@ -225,6 +226,7 @@ class Solver {
 
   vector<RowAccessInfo> imb_data_infos_;
   vector<RowAccessInfo> imb_diff_infos_;
+  int num_tables_;
   vector<LayerInfo> layer_infos_;
   vector<Blob<Dtype>*> test_net_output_blobs_;
 

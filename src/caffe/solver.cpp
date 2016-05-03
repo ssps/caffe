@@ -198,7 +198,7 @@ void Solver<Dtype>::InitTestNets() {
 }
 
 template <>
-void Solver<float>::InitPs() {
+void Solver<float>::PrepareAccessInfo() {
   vector<shared_ptr<Layer<float> > >& layers = this->net_->layers_;
   vector<string>& layer_types = this->net_->layer_types_;
   vector<string>& layer_names = this->net_->layer_names_;
@@ -270,7 +270,7 @@ void Solver<float>::InitPs() {
     layer_info.snapshot_solverstate_time = 0;
   }
   CHECK_EQ(total_num_params, params.size());
-  int num_tables = row_id == 0 ? table_id : table_id + 1;
+  num_tables_ = row_id == 0 ? table_id : table_id + 1;
 
   /* Decide row keys for intermediate data blobs */
   vector<shared_ptr<Blob<float> > >& imbs = this->net_->blobs_;
@@ -278,9 +278,7 @@ void Solver<float>::InitPs() {
   for (int imb_id = 0; imb_id < imbs.size(); imb_id++) {
     RowAccessInfo& imb_info = imb_data_infos_[imb_id];
     imb_info.num_vals = imbs[imb_id]->count();
-    cerr << "imbs[imb_id]->count() = " << imbs[imb_id]->count() << endl;
     int num_rows = (imb_info.num_vals + ROW_DATA_SIZE - 1) / ROW_DATA_SIZE;
-    // cerr << num_rows << endl;
     for (int i = 0; i < num_rows; i++) {
       imb_info.row_ids.push_back(local_store_row_id++);
     }
@@ -557,9 +555,6 @@ void Solver<float>::InitPs() {
   }
 
   /* Prepare access handles */
-  int64_t total_size = 0;
-  int64_t read_size = 0;
-  int64_t write_size = 0;
   for (int layer_id = 0; layer_id < layer_infos_.size(); layer_id++) {
     LayerInfo& layer_info = layer_infos_[layer_id];
     layer_info.layer_handles.resize(ps_config_.batches_per_clock);
@@ -575,9 +570,16 @@ void Solver<float>::InitPs() {
       layer_handles.imb_diffs_to_release_bw.resize(layer_info.imb_diffs_to_release_bw.size());
     }
   }
+}
+
+template <>
+void Solver<float>::InitPs() {
+  /* Decide rows to access at each layer */
+  PrepareAccessInfo();
+  vector<bool>& layer_need_backward = this->net_->layer_need_backward_;
 
   /* Initialize GeePS */
-  ps_config_.geeps_config.num_tables = num_tables;
+  ps_config_.geeps_config.num_tables = num_tables_;
   CHECK(ps_config_.geeps_config.host_list.size());
   ps_ = make_shared<GeePs>(ps_config_.worker_id, ps_config_.geeps_config);
 
@@ -613,9 +615,6 @@ void Solver<float>::InitPs() {
         handle = ps_->VirtualLocalAccess(
             access_info.row_ids, imb_info.fetch);
         access_info.data_handle = handle;
-        total_size += access_info.num_vals;
-        read_size += imb_info.fetch ? access_info.num_vals : 0;
-        CHECK_GE(read_size, 0);
       }
       /* Access intermediate diff blobs */
       for (int i = 0; i < layer_info.imb_diffs_to_access_fw.size(); i++) {
@@ -626,9 +625,6 @@ void Solver<float>::InitPs() {
         handle = ps_->VirtualLocalAccess(
             access_info.row_ids, imb_info.fetch);
         access_info.data_handle = handle;
-        total_size += access_info.num_vals;
-        read_size += imb_info.fetch ? access_info.num_vals : 0;
-        CHECK_GE(read_size, 0);
       }
 #endif
 #if defined(LOCAL_DATA_IN_PS)
@@ -642,8 +638,6 @@ void Solver<float>::InitPs() {
         handle = ps_->VirtualPostLocalAccess(
             access_info.data_handle, imb_info.keep);
         access_info.data_handle = -1;
-        write_size += imb_info.keep ? access_info.num_vals : 0;
-        CHECK_GE(write_size, 0);
       }
       /* Release intermediate diff blobs */
       for (int i = 0; i < layer_info.imb_diffs_to_release_fw.size(); i++) {
@@ -655,8 +649,6 @@ void Solver<float>::InitPs() {
         handle = ps_->VirtualPostLocalAccess(
             access_info.data_handle, imb_info.keep);
         access_info.data_handle = -1;
-        write_size += imb_info.keep ? access_info.num_vals : 0;
-        CHECK_GE(write_size, 0);
       }
 #endif
       /* Release model parameters */
@@ -703,9 +695,6 @@ void Solver<float>::InitPs() {
         handle = ps_->VirtualLocalAccess(
             access_info.row_ids, imb_info.fetch);
         access_info.data_handle = handle;
-        total_size += access_info.num_vals;
-        read_size += imb_info.fetch ? access_info.num_vals : 0;
-        CHECK_GE(read_size, 0);
       }
       /* Access intermediate diff blobs */
       for (int i = 0; i < layer_info.imb_diffs_to_access_bw.size(); i++) {
@@ -717,9 +706,6 @@ void Solver<float>::InitPs() {
         handle = ps_->VirtualLocalAccess(
             access_info.row_ids, imb_info.fetch);
         access_info.data_handle = handle;
-        total_size += access_info.num_vals;
-        read_size += imb_info.fetch ? access_info.num_vals : 0;
-        CHECK_GE(read_size, 0);
       }
 #endif
 #if defined(LOCAL_DATA_IN_PS)
@@ -734,8 +720,6 @@ void Solver<float>::InitPs() {
         handle = ps_->VirtualPostLocalAccess(
             access_info.data_handle, imb_info.keep);
         access_info.data_handle = -1;
-        write_size += imb_info.keep ? access_info.num_vals : 0;
-        CHECK_GE(write_size, 0);
       }
       /* Postaccess intermediate diff blobs */
       for (int i = 0; i < layer_info.imb_diffs_to_release_bw.size(); i++) {
@@ -748,8 +732,6 @@ void Solver<float>::InitPs() {
         handle = ps_->VirtualPostLocalAccess(
             access_info.data_handle, imb_info.keep);
         access_info.data_handle = -1;
-        write_size += imb_info.keep ? access_info.num_vals : 0;
-        CHECK_GE(write_size, 0);
       }
 #endif
       /* Postread and write model parameters */
