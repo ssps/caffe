@@ -1527,21 +1527,20 @@ void Solver<Dtype>::Step(int iters) {
       LOG(INFO) << "Compute time: " << compute_time;
       LOG(INFO) << "Test time: " << test_time;
       LOG(INFO) << "Snapshot time: " << snapshot_time;
-      // LOG(INFO) << "Compute time: " << total_time - read_time;
       LOG(INFO) << "Total time: " << total_time;
-      LOG(INFO) << "Per layer forwardbackward times:";
-      for (int i = 0; i < layer_infos_.size(); i++) {
-        cerr << i << "," << layer_infos_[i].fw_read_time
-             << "," << layer_infos_[i].fw_compute_time
-             << "," << layer_infos_[i].fw_write_time
-             << endl;
-      }
-      for (int i = layer_infos_.size() - 1; i >= 0; i--) {
-        cerr << i << "," << layer_infos_[i].bw_read_time
-             << "," << layer_infos_[i].bw_compute_time
-             << "," << layer_infos_[i].bw_write_time
-             << endl;
-      }
+      // LOG(INFO) << "Per layer forwardbackward times:";
+      // for (int i = 0; i < layer_infos_.size(); i++) {
+        // cerr << i << "," << layer_infos_[i].fw_read_time
+             // << "," << layer_infos_[i].fw_compute_time
+             // << "," << layer_infos_[i].fw_write_time
+             // << endl;
+      // }
+      // for (int i = layer_infos_.size() - 1; i >= 0; i--) {
+        // cerr << i << "," << layer_infos_[i].bw_read_time
+             // << "," << layer_infos_[i].bw_compute_time
+             // << "," << layer_infos_[i].bw_write_time
+             // << endl;
+      // }
     }
 
     if (do_test) {

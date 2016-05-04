@@ -138,8 +138,8 @@ void parse_config_file(caffe::PsConfig& ps_config) {
      ->default_value(-3),
      "")
     ("gpu_memory_capacity",
-     po::value<int>(&(ps_config.geeps_config.gpu_memory_capacity))
-     ->default_value(-1),
+     po::value<size_t>(&(ps_config.geeps_config.gpu_memory_capacity))
+     ->default_value(std::numeric_limits<size_t>::max()),
      "")
     ("read_my_writes",
      po::value<int>(&(ps_config.geeps_config.read_my_writes))
