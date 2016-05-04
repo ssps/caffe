@@ -125,17 +125,9 @@ void parse_config_file(caffe::PsConfig& ps_config) {
     ("num_channels",
      po::value<uint32_t>(&(ps_config.geeps_config.num_comm_channels)),
      "")
-    ("thread_cache_capacity",
-     po::value<int>(&(ps_config.geeps_config.thread_cache_capacity))
+    ("mm_warning_level",
+     po::value<int>(&(ps_config.geeps_config.mm_warning_level))
      ->default_value(0),
-     "")
-    ("gpu_process_cache_capacity",
-     po::value<int>(&(ps_config.geeps_config.gpu_process_cache_capacity))
-     ->default_value(-3),
-     "")
-    ("gpu_local_storage_capacity",
-     po::value<int>(&(ps_config.geeps_config.gpu_local_storage_capacity))
-     ->default_value(-3),
      "")
     ("gpu_memory_capacity",
      po::value<size_t>(&(ps_config.geeps_config.gpu_memory_capacity))
