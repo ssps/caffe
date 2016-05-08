@@ -20,4 +20,4 @@ if [ "$#" -eq 1 ]; then
   LOG=$1/output.txt
 fi
 
-pdsh -R ssh -w ^examples/cifar10/8parts/machinefile "cd /users/hengganc/tank/geeps/apps/caffe && ./build/tools/caffe_geeps train --solver=examples/cifar10/8parts/inception_solver.prototxt --ps_config=examples/cifar10/8parts/ps_config_inception --machinefile=examples/cifar10/8parts/machinefile --worker_id=%n" 2>&1 | tee ${LOG}
+pdsh -R ssh -w ^examples/cifar10/8parts/machinefile "cd $(pwd) && ./build/tools/caffe_geeps train --solver=examples/cifar10/8parts/inception_solver.prototxt --ps_config=examples/cifar10/8parts/ps_config_inception --machinefile=examples/cifar10/8parts/machinefile --worker_id=%n" 2>&1 | tee ${LOG}

@@ -7,6 +7,8 @@ DBTYPE=lmdb
 
 echo "Creating $DBTYPE..."
 
+rm -r examples/cifar10/8parts/cifar10_train_lmdb.%
+rm -r examples/cifar10/8parts/cifar10_test_lmdb.%
 ./build/examples/cifar10/convert_partitioned_cifar_data.bin $DATA $OUTPUT $DBTYPE 8 %
 
 echo "Computing image mean..."
