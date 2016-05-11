@@ -80,7 +80,15 @@ class LayerRegistry {
     CreatorRegistry& registry = Registry();
     CHECK_EQ(registry.count(type), 1) << "Unknown layer type: " << type
         << " (known types: " << LayerTypeListString() << ")";
-    return registry[type](param);
+    Creator& creator = registry[type];
+    if (Caffe::root_solver()) {
+      LOG(INFO) << "Creator made";
+    }
+    shared_ptr<Layer<Dtype> > layer = creator(param);
+    if (Caffe::root_solver()) {
+      LOG(INFO) << "Done";
+    }
+    return layer;
   }
 
   static vector<string> LayerTypeList() {
