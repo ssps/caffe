@@ -15,9 +15,11 @@ void CuDNNBatchNormLayer<Dtype>::Forward_gpu(
     const vector<Blob<Dtype>*>& bottom,
     const vector<Blob<Dtype>*>& top) {
   const Dtype* bottom_data = bottom[0]->gpu_data();
+  CHECK_EQ(this->blobs_.size(), 2);
   const Dtype* scale_data = this->blobs_[0]->gpu_data();
   const Dtype* bias_data = this->blobs_[1]->gpu_data();
 
+  CHECK_EQ(top.size(), 5);
   Dtype* top_data = top[0]->mutable_gpu_data();
   // Dtype* save_mean = save_mean_.mutable_gpu_data();
   // Dtype* save_inv_var = save_inv_var_.mutable_gpu_data();
@@ -26,7 +28,10 @@ void CuDNNBatchNormLayer<Dtype>::Forward_gpu(
   double epsilon = max(this->eps_, CUDNN_BN_MIN_EPSILON);
 
   if (this->phase_ == TRAIN) {
+    Dtype* running_mean = top[3]->mutable_gpu_data();
+    Dtype* running_var = top[4]->mutable_gpu_data();
     // Call Batch normalization forward
+    LOG(INFO) << "Ready to call cudnnBatchNormalizationForwardTraining";
     CUDNN_CHECK(cudnnBatchNormalizationForwardTraining(
       Caffe::cudnn_handle(),
       mode_,
@@ -40,12 +45,15 @@ void CuDNNBatchNormLayer<Dtype>::Forward_gpu(
       scale_data,
       bias_data,
       1-this->moving_average_fraction_,
-      this->blobs_[2]->mutable_gpu_data(),  // mean
-      this->blobs_[3]->mutable_gpu_data(),  // variance
+      running_mean,  // mean
+      running_var,  // variance
       epsilon,
       save_mean,
       save_inv_var));
+    LOG(INFO) << "Finished cudnnBatchNormalizationForwardTraining";
   } else if (this->phase_ == TEST) {
+    const Dtype* running_mean = top[3]->gpu_data();
+    const Dtype* running_var = top[4]->gpu_data();
     CUDNN_CHECK(cudnnBatchNormalizationForwardInference(
       Caffe::cudnn_handle(),
       mode_,
@@ -58,8 +66,8 @@ void CuDNNBatchNormLayer<Dtype>::Forward_gpu(
       scale_bias_mean_var_desc_,
       scale_data,
       bias_data,
-      this->blobs_[2]->gpu_data(),  // mean
-      this->blobs_[3]->gpu_data(),  // variance
+      running_mean,  // mean
+      running_var,  // variance
       epsilon));
   } else {
     LOG(FATAL) << "Unknown phase";

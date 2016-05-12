@@ -25,27 +25,19 @@ def BatchNorm(data, name):
   top = name
   temp1 = top + '/temp1'
   temp2 = top + '/temp2'
+  temp3 = top + '/temp3'
+  temp4 = top + '/temp4'
   print 'layer {'
   print '  bottom: "%s"' % bottom
   print '  name: "%s"' % name
   print '  top: "%s"' % top
   print '  top: "%s"' % temp1
   print '  top: "%s"' % temp2
+  print '  top: "%s"' % temp3
+  print '  top: "%s"' % temp4
   print '  type: "BatchNorm"'
   print '}'
-  bottom2 = top
-  name2 = bottom2 + '/sc'
-  top2 = name2
-  print 'layer {'
-  print '  bottom: "%s"' % bottom2
-  print '  top: "%s"' % top2
-  print '  name: "%s"' % name2
-  print '  type: "Scale"'
-  print '  scale_param {'
-  print '    bias_term: true'
-  print '  }'
-  print '}'
-  return top2
+  return top
 
 def Activation(data, name, act_type):
   assert act_type == "relu"

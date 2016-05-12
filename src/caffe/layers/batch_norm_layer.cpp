@@ -20,34 +20,9 @@ void BatchNormLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
   else
     channels_ = bottom[0]->shape(1);
   eps_ = param.eps();
-  if (this->blobs_.size() > 0) {
-    LOG(INFO) << "Skipping parameter initialization";
-  } else {
-    this->blobs_.resize(5);
 
-    vector<int> sz;
-    sz.push_back(channels_);
-    this->blobs_[0].reset(new Blob<Dtype>(sz));  // scale
-    this->blobs_[1].reset(new Blob<Dtype>(sz));  // bias
-    this->blobs_[2].reset(new Blob<Dtype>(sz));  // mean
-    this->blobs_[3].reset(new Blob<Dtype>(sz));  // variance
-
-    shared_ptr<Filler<Dtype> > scale_filler(
-      GetFiller<Dtype>(this->layer_param_.batch_norm_param().scale_filler()));
-    scale_filler->Fill(this->blobs_[0].get());
-    shared_ptr<Filler<Dtype> > bias_filler(
-      GetFiller<Dtype>(this->layer_param_.batch_norm_param().bias_filler()));
-    bias_filler->Fill(this->blobs_[1].get());
-
-    caffe_set(this->blobs_[2]->count(), Dtype(0.),
-        this->blobs_[2]->mutable_cpu_data());
-    caffe_set(this->blobs_[3]->count(), Dtype(0.),
-        this->blobs_[3]->mutable_cpu_data());
-
-    sz[0]=1;
-    this->blobs_[4].reset(new Blob<Dtype>(sz));
-    iter_ = 0;
-  }
+  /* Cui: We should always use CuDNNBatchNormLayer, so here,
+   * I have removed the code of initializing the blobs */
 }
 
 template <typename Dtype>
@@ -57,32 +32,8 @@ void BatchNormLayer<Dtype>::Reshape(const vector<Blob<Dtype>*>& bottom,
     CHECK_EQ(bottom[0]->shape(1), channels_);
   top[0]->ReshapeLike(*bottom[0]);
 
-  int N = bottom[0]->shape(0);
-  int NC = N* channels_;
-  int S = bottom[0]->count() / NC;  // S = H*W
-
-  vector<int> sz;
-  sz.push_back(channels_);
-  mean_.Reshape(sz);
-  variance_.Reshape(sz);
-  inv_variance_.Reshape(sz);
-  temp_C_.Reshape(sz);
-
-  sz[0] = N;
-  ones_N_.Reshape(sz);
-  caffe_set(ones_N_.count(), Dtype(1.), ones_N_.mutable_cpu_data());
-  sz[0] = channels_;
-  ones_C_.Reshape(sz);
-  caffe_set(ones_C_.count(), Dtype(1.), ones_C_.mutable_cpu_data());
-  sz[0] = S;
-  ones_HW_.Reshape(sz);
-  caffe_set(ones_HW_.count(), Dtype(1.), ones_HW_.mutable_cpu_data());
-
-  sz[0] = NC;
-  temp_NC_.Reshape(sz);
-
-  temp_.ReshapeLike(*bottom[0]);
-  x_norm_.ReshapeLike(*bottom[0]);
+  /* Cui: We should always use CuDNNBatchNormLayer, so here,
+   * I have removed the code of initializing the temporary variables */
 }
 
 //  multicast x[c] into y[.,c,...]

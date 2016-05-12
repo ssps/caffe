@@ -26,29 +26,18 @@ void CuDNNBatchNormLayer<Dtype>::LayerSetUp(
   mode_ = CUDNN_BATCHNORM_SPATIAL;
   int channels = bottom[0]->channels();
 
-  if (this->blobs_.size() != 5) {
-    LOG(INFO) << "Skipping parameter initialization";
-  } else {
-    this->blobs_.resize(5);
-    this->blobs_[0].reset(new Blob<Dtype>(1, channels, 1, 1));
-    this->blobs_[1].reset(new Blob<Dtype>(1, channels, 1, 1));
-    this->blobs_[2].reset(new Blob<Dtype>(1, channels, 1, 1));
-    this->blobs_[3].reset(new Blob<Dtype>(1, channels, 1, 1));
-    this->blobs_[4].reset(new Blob<Dtype>(1, 1, 1, 1));
+  CHECK_EQ(this->blobs_.size(), 0);
+  this->blobs_.resize(2);
+  this->blobs_[0].reset(new Blob<Dtype>(1, channels, 1, 1));  // scale
+  this->blobs_[1].reset(new Blob<Dtype>(1, channels, 1, 1));  // bias
 
-    shared_ptr<Filler<Dtype> > scale_filler(
-      GetFiller<Dtype>(this->layer_param_.batch_norm_param().scale_filler()));
-    scale_filler->Fill(this->blobs_[0].get());
+  shared_ptr<Filler<Dtype> > scale_filler(
+    GetFiller<Dtype>(this->layer_param_.batch_norm_param().scale_filler()));
+  scale_filler->Fill(this->blobs_[0].get());
 
-    shared_ptr<Filler<Dtype> > bias_filler(
-      GetFiller<Dtype>(this->layer_param_.batch_norm_param().bias_filler()));
-    bias_filler->Fill(this->blobs_[1].get());
-
-    for (int i = 2; i < 5; i++) {
-      caffe_set(this->blobs_[i]->count(), Dtype(0),
-                this->blobs_[i]->mutable_cpu_data());
-    }
-  }
+  shared_ptr<Filler<Dtype> > bias_filler(
+    GetFiller<Dtype>(this->layer_param_.batch_norm_param().bias_filler()));
+  bias_filler->Fill(this->blobs_[1].get());
 
   handles_setup_ = true;
 }
@@ -74,13 +63,17 @@ void CuDNNBatchNormLayer<Dtype>::Reshape(
   if (mode_ == CUDNN_BATCHNORM_SPATIAL) {
     // save_mean_.Reshape(1, C, 1, 1);
     // save_inv_var_.Reshape(1, C, 1, 1);
-    top[1]->Reshape(1, C, 1, 1);
-    top[2]->Reshape(1, C, 1, 1);
+    top[1]->Reshape(1, C, 1, 1);  // save_mean
+    top[2]->Reshape(1, C, 1, 1);  // save_inv_var
+    top[3]->Reshape(1, C, 1, 1);  // running_mean
+    top[4]->Reshape(1, C, 1, 1);  // running_var
   } else if (mode_ == CUDNN_BATCHNORM_PER_ACTIVATION) {
     // save_mean_.Reshape(1, C, H, W);
     // save_inv_var_.Reshape(1, C, H, W);
-    top[1]->Reshape(1, C, H, W);
-    top[2]->Reshape(1, C, H, W);
+    top[1]->Reshape(1, C, H, W);  // save_mean
+    top[2]->Reshape(1, C, H, W);  // save_inv_var
+    top[3]->Reshape(1, C, H, W);  // running_mean
+    top[4]->Reshape(1, C, H, W);  // running_var
   } else {
     LOG(FATAL) << "Unknown cudnnBatchNormMode_t";
   }

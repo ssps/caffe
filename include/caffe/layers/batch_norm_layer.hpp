@@ -54,7 +54,7 @@ class BatchNormLayer : public Layer<Dtype> {
 
   virtual inline const char* type() const { return "BatchNorm"; }
   virtual inline int ExactNumBottomBlobs() const { return 1; }
-  virtual inline int ExactNumTopBlobs() const { return 3; }
+  virtual inline int ExactNumTopBlobs() const { return 5; }
 
  protected:
   virtual void Forward_cpu(const vector<Blob<Dtype>*>& bottom,

@@ -5,8 +5,6 @@
 
 namespace caffe {
 
-__global__ void sync_conv_groups() { }
-
 template <typename Dtype>
 void CuDNNConvolutionLayer<Dtype>::Forward_gpu(
     const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top) {
@@ -46,6 +44,9 @@ void CuDNNConvolutionLayer<Dtype>::Forward_gpu(
 template <typename Dtype>
 void CuDNNConvolutionLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top,
     const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom) {
+  /* Cui: synchronize with our current stream before using these new streams */
+  CUDA_CHECK(cudaStreamSynchronize(Caffe::cuda_stream()));
+
   const Dtype* weight = NULL;
   Dtype* weight_diff = NULL;
   if (this->param_propagate_down_[0]) {
