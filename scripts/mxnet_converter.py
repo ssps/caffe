@@ -36,6 +36,15 @@ def BatchNorm(data, name):
   print '  top: "%s"' % temp3
   print '  top: "%s"' % temp4
   print '  type: "BatchNorm"'
+  print '  batch_norm_param {'
+  print '    scale_filler {'
+  print '      type: "xavier"'
+  print '    }'
+  print '    bias_filler {'
+  print '      type: "constant"'
+  print '      value: 0.2'
+  print '    }'
+  print '  }'
   print '}'
   return top
 
