@@ -31,7 +31,6 @@ void CuDNNBatchNormLayer<Dtype>::Forward_gpu(
     Dtype* running_mean = top[3]->mutable_gpu_data();
     Dtype* running_var = top[4]->mutable_gpu_data();
     // Call Batch normalization forward
-    LOG(INFO) << "Ready to call cudnnBatchNormalizationForwardTraining";
     CUDNN_CHECK(cudnnBatchNormalizationForwardTraining(
       Caffe::cudnn_handle(),
       mode_,
@@ -50,7 +49,6 @@ void CuDNNBatchNormLayer<Dtype>::Forward_gpu(
       epsilon,
       save_mean,
       save_inv_var));
-    LOG(INFO) << "Finished cudnnBatchNormalizationForwardTraining";
   } else if (this->phase_ == TEST) {
     const Dtype* running_mean = top[3]->gpu_data();
     const Dtype* running_var = top[4]->gpu_data();
@@ -78,7 +76,7 @@ template <typename Dtype>
 void CuDNNBatchNormLayer<Dtype>::Backward_gpu(
     const vector<Blob<Dtype>*>& top,
     const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom) {
-  const Dtype* top_data = top[0]->gpu_data();
+  // const Dtype* top_data = top[0]->gpu_data();
   const Dtype* top_diff = top[0]->gpu_diff();
   const Dtype* bottom_data = bottom[0]->gpu_data();
   // const Dtype* save_mean = save_mean_.gpu_data();
