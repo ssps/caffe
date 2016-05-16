@@ -394,8 +394,6 @@ int time() {
 RegisterBrewFunction(time);
 
 int main(int argc, char** argv) {
-  std::cout << "process_rank = " << FLAGS_worker_id << std::endl;
-
   // Print output to stderr (while still logging).
   FLAGS_alsologtostderr = 1;
   // FLAGS_alsologtostderr = 0;
