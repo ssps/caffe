@@ -2,6 +2,6 @@ num_channels=4
 slack=0
 gpu_memory_capacity=4200000000
 mm_warning_level=3
-layers_per_table=10
+layers_per_table=2
+keep_momentum=1
 debug=0
-

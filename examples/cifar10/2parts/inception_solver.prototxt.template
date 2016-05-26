@@ -23,6 +23,6 @@ max_iter: 40000000
 # snapshot intermediate results
 snapshot: 2000
 # snapshot_format: HDF5
-# snapshot_prefix: "examples/cifar10/1part/cifar10_quick"
+snapshot_prefix: "examples/cifar10/2parts/inception_snapshot"
 # solver mode: CPU or GPU
 solver_mode: GPU

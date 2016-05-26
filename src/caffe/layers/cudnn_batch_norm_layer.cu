@@ -27,6 +27,7 @@ void CuDNNBatchNormLayer<Dtype>::Forward_gpu(
   Dtype* save_inv_var = top[2]->mutable_gpu_data();
   double epsilon = max(this->eps_, CUDNN_BN_MIN_EPSILON);
 
+  // if (true) {
   if (this->phase_ == TRAIN) {
     Dtype* running_mean = top[3]->mutable_gpu_data();
     Dtype* running_var = top[4]->mutable_gpu_data();
