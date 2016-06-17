@@ -165,6 +165,10 @@ void parse_config_file(caffe::PsConfig& ps_config) {
      po::value<int>(&(ps_config.debug))
      ->default_value(0),
      "")
+    ("overlap_transfer",
+     po::value<int>(&(ps_config.overlap_transfer))
+     ->default_value(0),
+     "")
     ("log_interval",
      po::value<int>(&(ps_config.geeps_config.log_interval))
      ->default_value(0),

@@ -63,6 +63,45 @@ Solver<Dtype>::Solver(const string& param_file, const Solver* root_solver)
   Init(param);
 }
 
+size_t count = 1024 * 1024;
+size_t size = count * sizeof(float);
+size_t rounds = 100000;
+void *cpu_ptr;
+void *cpu_ptr2;
+void *gpu_ptr;
+void *gpu_ptr2;
+
+static void *thread_run(void *arg) {
+  size_t thread_id = static_cast<size_t>((unsigned long)(arg));
+  // void *local_cpu_ptr = reinterpret_cast<void *>(&reinterpret_cast<char *>(cpu_ptr)[start]);
+  // void *local_cpu_ptr2 = reinterpret_cast<void *>(&reinterpret_cast<char *>(cpu_ptr2)[start]);
+  // for (size_t r = 0; r < rounds; r++) {
+    // memcpy(local_cpu_ptr2, local_cpu_ptr, local_size);
+  // }
+  cudaStream_t stream;
+  cudaError_t result;
+  result = cudaStreamCreate(&stream);
+  tbb::tick_count tick_start = tbb::tick_count::now();
+  for (size_t r = 0; r < rounds; r++) {
+    if (thread_id == 0) {
+      cudaMemcpyAsync(gpu_ptr, cpu_ptr, size, cudaMemcpyDefault, stream);
+      cudaStreamSynchronize(stream);
+      if ((r + 1) % 1000 == 0) {
+        LOG(INFO) << 4 * r << " MB memory CPU->GPU copied in "
+           << (tbb::tick_count::now() - tick_start).seconds();
+      }
+    } else {
+      cudaMemcpyAsync(cpu_ptr2, gpu_ptr2, size, cudaMemcpyDefault, stream);
+      cudaStreamSynchronize(stream);
+      if ((r + 1) % 1000 == 0) {
+        LOG(INFO) << 4 * r << " MB memory GPU->CPU copied in "
+            << (tbb::tick_count::now() - tick_start).seconds();
+      }
+    }
+  }
+  result = cudaStreamDestroy(stream);
+}
+
 template <typename Dtype>
 void Solver<Dtype>::Init(const SolverParameter& param) {
   LOG(INFO) << "Initializing solver from parameters: " << std::endl
@@ -78,6 +117,28 @@ void Solver<Dtype>::Init(const SolverParameter& param) {
   LOG(INFO) << "Solver scaffolding done.";
   iter_ = 0;
   current_step_ = 0;
+
+  // bool overlap_transfer = false;
+  // bool overlap_transfer = true;
+  if (ps_config_.overlap_transfer) {
+  // cpu_ptr = malloc(size);
+  // cpu_ptr2 = malloc(size);
+    cudaMallocHost(&cpu_ptr, size);
+    cudaMallocHost(&cpu_ptr2, size);
+    cudaMalloc(&gpu_ptr, size);
+    cudaMalloc(&gpu_ptr2, size);
+
+    int num_threads = 2;
+    pthread_t *thread_ids = new pthread_t[num_threads];
+    pthread_attr_t thread_attr;
+    void *res;
+    pthread_attr_init(&thread_attr);
+
+    for (size_t i = 0; i < num_threads; i++) {
+      void *thread_arg = (void *)(static_cast<unsigned long>(i));
+      pthread_create(&thread_ids[i], &thread_attr, thread_run, thread_arg);
+    }
+  }
 
   /* Initialize parameter server */
   InitPs();

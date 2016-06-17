@@ -8,7 +8,7 @@ net: "examples/cifar10/2parts/inception_train_val.prototxt.%"
 test_iter: 156
 # Carry out testing every 500 training iterations.
 test_interval: 1000
-test_initialization: false
+# test_initialization: false
 snapshot_after_train: false
 # The base learning rate, momentum and the weight decay of the network.
 base_lr: 0.001

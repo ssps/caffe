@@ -23,10 +23,11 @@ struct PsConfig {
   string snapshot_name;
   int keep_momentum;
   int debug;
+  int overlap_transfer;
   GeePsConfig geeps_config;
   PsConfig() : slack(0), batches_per_clock(1),
       multi_table(1), layers_per_table(1),
-      snapshot_name(""), keep_momentum(1) {}
+      snapshot_name(""), keep_momentum(1), debug(0), overlap_transfer(0) {}
 };
 
 struct RowAccessInfo {
