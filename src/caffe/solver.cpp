@@ -358,6 +358,7 @@ void Solver<float>::PrepareAccessInfo() {
           layer_types[layer_id] == "LRN" ||
           layer_types[layer_id] == "Pooling" ||
           layer_types[layer_id] == "BatchNorm" ||
+          layer_types[layer_id] == "Eltwise" ||
           layer_types[layer_id] == "Dropout" ||
           layer_types[layer_id] == "SoftmaxWithLoss") {
         imbs_used_bw[blob_id] = FetchKeep(true, false);
